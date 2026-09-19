@@ -6,7 +6,8 @@ import Quickshell.Widgets
 
 // Pływająca "wyspa" na górze ekranu: w spoczynku pokazuje tylko zegar,
 // po najechaniu myszką (lub kliknięciu wyspy) rozwija się w karuzelę kart
-// (muzyka | Discord | zegar | łączność | powiadomienia) przewijaną kółkiem. Dodatkowo sama się rozwija
+// (AirPods | muzyka | Discord | zegar | łączność | powiadomienia) przewijaną
+// kółkiem; karta AirPodsów istnieje tylko wtedy, gdy słuchawki są połączone. Dodatkowo sama się rozwija
 // na chwilę, gdy zmieni się utwór — tak jak w iOS. Podczas rozmowy na
 // Discordzie obok zwiniętej pigułki stoi druga, mała, z nazwą kanału i timerem.
 PanelWindow {
@@ -28,6 +29,7 @@ PanelWindow {
     property int noticeDuration: 3200   // jak długo trwa auto-rozwinięcie przy zmianie utworu
     property int notificationDuration: 4500   // ...przy nowym powiadomieniu
     property int jobNoticeDuration: 3000      // ...na starcie transferu plików
+    property int airPodsNoticeDuration: 3500  // ...po połączeniu AirPodsów
     property int jobBarGap: 4                 // przerwa między wyspą a paskiem postępu pod nią
 
     // Dogładzanie słupków widma po stronie QML. Przy 60 fps klatka przychodzi
@@ -64,12 +66,29 @@ PanelWindow {
     // Karta powiadomień zmienia wysokość (dymek jest niższy niż historia),
     // ale okno liczy się od jej wyższego wariantu — inaczej każde powiadomienie
     // przestawiałoby rozmiar okna layer-shell tam i z powrotem.
-    readonly property int maxCardHeight: Math.max(...cardHeights, notifications.historyHeight)
+    //
+    // Karta AirPodsów wchodzi do rachunku zawsze, także gdy jej nie ma w karuzeli —
+    // z tego samego powodu: połączenie słuchawek nie ma zmieniać rozmiaru okna.
+    readonly property int maxCardHeight: Math.max(...cardHeights, airpods.implicitHeight, notifications.historyHeight)
     property int bottomReserve: 6
     implicitHeight: topMargin + maxCardHeight + bottomReserve + jobBarGap + jobBar.height
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore   // nie rezerwujemy miejsca — wyspa "unosi się" nad oknami
     focusable: false
+
+    // Ukrycie skrótem (IpcHandler w shell.qml). Najpierw wygaszamy treść, potem
+    // chowamy całe okno: samo przezroczyste okno nadal łapałoby kursor maską
+    // i rozwijało się pod niewidoczną ręką.
+    property bool hiddenByUser: false
+    property real shownOpacity: hiddenByUser ? 0 : 1
+    Behavior on shownOpacity {
+        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+    }
+    contentItem.opacity: shownOpacity
+    visible: !hiddenByUser || shownOpacity > 0
+
+    // Przypięta wyspa wróciłaby po odkryciu od razu rozwinięta.
+    onHiddenByUserChanged: if (hiddenByUser) pinned = false
 
     // Rozmiar DOCELOWY wyspy — bez animacji. Maska wejściowa i obszar reagujący
     // na kursor muszą wyprzedzać animację rozwijania: gdyby szły za animowaną
@@ -112,8 +131,8 @@ PanelWindow {
     // go widzieć — bez tego wyspa zwijałaby się w chwili najechania na przycisk.
     readonly property bool controlsHovered: btnPrev.hovering || btnPlay.hovering || btnNext.hovering
         || btnMic.hovering || btnDeaf.hovering || btnLeave.hovering
-        || outputChip.hovering || outputChipIdle.hovering
-        || connectivity.hovering || notifications.hovering
+        || outputChip.hovering || outputChipIdle.hovering || micSwitch.hovering
+        || connectivity.hovering || notifications.hovering || airpods.hovering
     readonly property bool pointerInside: areaHover.hovered || controlsHovered || pillHover.hovered
 
     onPointerInsideChanged: {
@@ -135,16 +154,17 @@ PanelWindow {
     property bool notice: false   // krótkie auto-rozwinięcie, "powiadomienie"
     readonly property bool expanded: hovered || pinned || notice
 
-    // Karta, do której wrócić po auto-rozwinięciu; -1 = nie wracać (muzyka
-    // zostaje na muzyce). Powiadomienie i transfer pokazują swoją kartę tylko
-    // na chwilę — użytkownik, który jej nie dotknął, ma dostać z powrotem tę,
-    // na której skończył.
-    property int cardBeforeNotice: -1
+    // Karta (nazwa, nie indeks), do której wrócić po auto-rozwinięciu;
+    // "" = nie wracać (muzyka zostaje na muzyce). Powiadomienie i transfer
+    // pokazują swoją kartę tylko na chwilę — użytkownik, który jej nie dotknął,
+    // ma dostać z powrotem tę, na której skończył.
+    property string keyBeforeNotice: ""
 
     onNoticeChanged: {
-        if (notice || cardBeforeNotice < 0) return;
-        if (!hovered && !pinned) setCard(cardBeforeNotice, false);
-        cardBeforeNotice = -1;
+        if (notice || keyBeforeNotice === "") return;
+        const card = cardKeys.indexOf(keyBeforeNotice);
+        if (!hovered && !pinned && card >= 0) setCard(card, false);
+        keyBeforeNotice = "";
     }
 
     // Kursor na wyspie wstrzymuje wygaszanie powiadomienia, żeby dało się
@@ -157,21 +177,49 @@ PanelWindow {
 
     // ---- karty ----
     // Rozwinięta wyspa to karuzela: każda karta ma własny rozmiar docelowy,
-    // wyspa animuje się do rozmiaru aktywnej. Indeksy nazwane, żeby nie liczyć.
-    readonly property int cardMusic: 0
-    readonly property int cardDiscord: 1
-    readonly property int cardClock: 2
-    readonly property int cardConnectivity: 3
-    readonly property int cardNotifications: 4
-    readonly property int cardCount: 5
+    // wyspa animuje się do rozmiaru aktywnej.
+    //
+    // Karta AirPodsów istnieje tylko przy połączonych słuchawkach, na lewo od
+    // muzyki, więc indeksy wszystkich kart przesuwają się wtedy o jeden. Dlatego aktywna
+    // karta jest pamiętana po NAZWIE (currentKey), a indeks z niej wyprowadzony —
+    // przy indeksie trzymanym wprost połączenie słuchawek przełączyłoby
+    // użytkownikowi kartę pod ręką (muzyka -> AirPodsy).
+    readonly property var cardKeys: airPodsShown
+        ? ["airpods", "music", "discord", "clock", "connectivity", "notifications"]
+        : ["music", "discord", "clock", "connectivity", "notifications"]
+    readonly property int cardMusic: cardKeys.indexOf("music")
+    readonly property int cardAirPods: cardKeys.indexOf("airpods")   // -1 bez słuchawek
+    readonly property int cardDiscord: cardKeys.indexOf("discord")
+    readonly property int cardClock: cardKeys.indexOf("clock")
+    readonly property int cardConnectivity: cardKeys.indexOf("connectivity")
+    readonly property int cardNotifications: cardKeys.indexOf("notifications")
+    readonly property int cardCount: cardKeys.length
+
+    // Ustawiane w Connections na AirPodsService, nie powiązaniem: przed zmianą
+    // układu kart trzeba zgasić animateCardChange, a powiązanie nie daje
+    // kontroli nad kolejnością. Bez tego po ostatnim przewinięciu kółkiem
+    // pasek kart przejechałby przy połączeniu słuchawek o jeden slot.
+    property bool airPodsShown: false
+    Component.onCompleted: airPodsShown = AirPodsService.connected
 
     // Wartość początkowa podąża za odtwarzaczem (muzyka, gdy coś gra, inaczej
     // zegar) dopóki użytkownik pierwszy raz nie przewinie — wtedy powiązanie
     // pęka i wyspa pamięta ostatnio używaną kartę.
-    property int currentCard: hasPlayer ? cardMusic : cardClock
+    property string currentKey: hasPlayer ? "music" : "clock"
+    // Karta, której już nie ma (AirPodsy rozłączone w trakcie) -> pierwsza.
+    // Connections niżej i tak przestawia wtedy currentKey na muzykę.
+    readonly property int currentCard: Math.max(0, cardKeys.indexOf(currentKey))
 
-    readonly property var cardWidths: [hasPlayer ? 440 : 296, 440, 296, connectivity.implicitWidth, notifications.implicitWidth]
-    readonly property var cardHeights: [hasPlayer ? 118 : 98, 118, 98, connectivity.implicitHeight, notifications.implicitHeight]
+    readonly property var cardSizes: ({
+        music: [hasPlayer ? 440 : 296, hasPlayer ? 118 : 98],
+        airpods: [airpods.implicitWidth, airpods.implicitHeight],
+        discord: [440, 118],
+        clock: [296, 98],
+        connectivity: [connectivity.implicitWidth, connectivity.implicitHeight],
+        notifications: [notifications.implicitWidth, notifications.implicitHeight]
+    })
+    readonly property var cardWidths: cardKeys.map(k => cardSizes[k][0])
+    readonly property var cardHeights: cardKeys.map(k => cardSizes[k][1])
 
     // Slot karuzeli = największa karta. Musi być stały, żeby przesunięcie
     // paska było liniowe w indeksie.
@@ -189,8 +237,9 @@ PanelWindow {
     property bool animateCardChange: false
 
     function setCard(card, animated) {
+        if (card < 0 || card >= root.cardCount) return;
         root.animateCardChange = animated === true;
-        root.currentCard = card;
+        root.currentKey = root.cardKeys[card];
     }
 
     function stepCard(delta) {
@@ -301,7 +350,7 @@ PanelWindow {
     // wyspa została zostawiona na innej — i już na niej zostaje.
     function showNotice() {
         if (!root.hasPlayer || root.trackTitle === "") return;
-        root.cardBeforeNotice = -1;
+        root.keyBeforeNotice = "";
         root.setCard(root.cardMusic, false);
         root.notice = true;
         noticeTimer.interval = root.noticeDuration;
@@ -311,8 +360,8 @@ PanelWindow {
     // Powiadomienie pulpitu / start transferu: karta powiadomień na chwilę,
     // potem powrót do poprzedniej.
     function showCardNotice(card, duration) {
-        if (root.currentCard !== card && root.cardBeforeNotice < 0)
-            root.cardBeforeNotice = root.currentCard;
+        if (root.currentCard !== card && root.keyBeforeNotice === "")
+            root.keyBeforeNotice = root.currentKey;
         root.setCard(card, false);
         root.notice = true;
         noticeTimer.interval = duration;
@@ -331,6 +380,51 @@ PanelWindow {
         function onNotified(entry) { root.showCardNotice(root.cardNotifications, root.notificationDuration); }
         function onJobStarted(job) { root.showCardNotice(root.cardNotifications, root.jobNoticeDuration); }
     }
+
+    // AirPodsy: karta wchodzi do karuzeli i wychodzi z niej razem z połączeniem.
+    // Przyjście słuchawek pokazuje ją na chwilę (bateria na pierwszy rzut oka),
+    // potem wyspa wraca do poprzedniej karty.
+    Connections {
+        target: AirPodsService
+
+        function onConnectedChanged() {
+            root.animateCardChange = false;
+            root.airPodsShown = AirPodsService.connected;
+            if (!AirPodsService.connected) root.pausedByEar = false;
+            if (!AirPodsService.connected && root.currentKey === "airpods")
+                root.setCard(root.hasPlayer ? root.cardMusic : root.cardClock, false);
+        }
+
+        function onArrived() { root.showCardNotice(root.cardAirPods, root.airPodsNoticeDuration); }
+
+        // Pauza po wyjęciu słuchawki i wznowienie po włożeniu, jak w iOS.
+        // Tylko gdy dźwięk idzie przez AirPodsy (routedHere). Wznawiamy
+        // wyłącznie to, co sami zapauzowaliśmy, i dopiero gdy w uszach jest
+        // znów tyle słuchawek, ile było przed pauzą — wyjęcie drugiej przy
+        // już zapauzowanej muzyce niczego nie zmienia.
+        function onEarsChanged(previous, current) {
+            if (!AirPodsService.autoPause || !AirPodsService.routedHere) return;
+            if (current < previous) {
+                if (root.isPlaying && root.player.canPause) {
+                    root.player.pause();
+                    root.pausedByEar = true;
+                    root.earsBeforePause = previous;
+                }
+            } else if (root.pausedByEar && current >= root.earsBeforePause) {
+                root.pausedByEar = false;
+                if (root.hasPlayer && !root.isPlaying && root.player.canPlay) root.player.play();
+            }
+        }
+    }
+
+    // Muzyka zapauzowana przez wyjęcie słuchawki — do wznowienia po włożeniu.
+    // Gaśnie, gdy użytkownik sam coś zrobi z odtwarzaniem albo słuchawki
+    // się rozłączą; inaczej włożenie słuchawek godzinę później puściłoby
+    // muzykę, której nikt nie chciał.
+    property bool pausedByEar: false
+    property int earsBeforePause: 0
+    onIsPlayingChanged: if (isPlaying) pausedByEar = false
+    onPlayerChanged: pausedByEar = false
 
     // Drobne opóźnienie zwijania — żeby wyspa nie migała przy krawędzi.
     Timer {
@@ -584,6 +678,18 @@ PanelWindow {
                     NumberAnimation { from: 0.35; to: 1.0; duration: 700; easing.type: Easing.InOutSine }
                 }
             }
+
+            // Wyłączony mikrofon systemowy. Tylko stan OFF — włączony to norma
+            // i stała ikona byłaby szumem, a o wyciszeniu łatwo zapomnieć.
+            // Bez micReady: przez pierwsze sekundy micOn jest false, bo
+            // PipeWire jeszcze nie wstał, i ikona mignęłaby na starcie.
+            IslandIcon {
+                Layout.alignment: Qt.AlignVCenter
+                kind: "micOff"
+                size: 14
+                color: "#e5484d"
+                visible: AudioService.micReady && !AudioService.micOn
+            }
         }
 
         // ---- widok rozwinięty: pasek kart ------------------------------
@@ -619,7 +725,7 @@ PanelWindow {
                 }
             }
 
-            // ---- karta 0: muzyka ----
+            // ---- karta: muzyka ----
             Item {
                 x: root.cardMusic * root.slotWidth
                 width: root.slotWidth
@@ -817,7 +923,22 @@ PanelWindow {
                 }
             }
 
-            // ---- karta 1: Discord ----
+            // ---- karta AirPodsów (tylko przy połączonych słuchawkach) ----
+            Item {
+                x: root.cardAirPods * root.slotWidth
+                width: root.slotWidth
+                height: parent.height
+                visible: root.airPodsShown
+
+                AirPodsCard {
+                    id: airpods
+                    anchors.centerIn: parent
+                    width: implicitWidth
+                    height: implicitHeight
+                }
+            }
+
+            // ---- karta: Discord ----
             Item {
                 x: root.cardDiscord * root.slotWidth
                 width: root.slotWidth
@@ -875,6 +996,30 @@ PanelWindow {
                                 font.pixelSize: 12
                                 visible: text !== ""
                             }
+
+                            // Mikrofon dla całego systemu (wszystkie źródła
+                            // PipeWire), niezależny od wyciszenia w Discordzie.
+                            RowLayout {
+                                Layout.topMargin: 4
+                                spacing: 7
+
+                                IslandSwitch {
+                                    id: micSwitch
+                                    Layout.alignment: Qt.AlignVCenter
+                                    checked: AudioService.micOn
+                                    enabled: AudioService.micReady
+                                    onToggled: AudioService.setMicOn(!AudioService.micOn)
+                                }
+
+                                Text {
+                                    Layout.alignment: Qt.AlignVCenter
+                                    text: AudioService.micOn ? "Mikrofon systemowy" : "Mikrofon wyłączony"
+                                    color: AudioService.micOn ? "#e2e2e6" : "#e5484d"
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    opacity: micSwitch.opacity
+                                }
+                            }
                         }
 
                         RowLayout {
@@ -910,7 +1055,7 @@ PanelWindow {
                 }
             }
 
-            // ---- karta 2: duży zegar + data ----
+            // ---- karta: duży zegar + data ----
             Item {
                 x: root.cardClock * root.slotWidth
                 width: root.slotWidth
@@ -938,7 +1083,7 @@ PanelWindow {
                 }
             }
 
-            // ---- karta 3: łączność (Wi-Fi, Bluetooth, urządzenia) ----
+            // ---- karta: łączność (Wi-Fi, Bluetooth, urządzenia) ----
             Item {
                 x: root.cardConnectivity * root.slotWidth
                 width: root.slotWidth
@@ -952,7 +1097,7 @@ PanelWindow {
                 }
             }
 
-            // ---- karta 4: powiadomienia i transfery ----
+            // ---- karta: powiadomienia i transfery ----
             Item {
                 x: root.cardNotifications * root.slotWidth
                 width: root.slotWidth

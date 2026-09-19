@@ -92,7 +92,15 @@ musi pozostać powiązaniem. Animuje się **tylko zmiana karty kółkiem**: kart
 ustawioną przez wyspę (powiadomienie, transfer, zmiana utworu, pigułka rozmowy)
 widać od razu na miejscu, inaczej przejazd kart nakłada się na rozwijanie.
 Każda zmiana idzie przez `setCard(karta, animowane)`, które ustawia
-`animateCardChange` przed przypisaniem — nie przypisuj `currentCard` wprost.
+`animateCardChange` przed przypisaniem.
+
+Aktywna karta jest pamiętana po **nazwie** (`currentKey`), a `currentCard` to
+indeks wyprowadzony z `cardKeys` — karta AirPodsów wchodzi do karuzeli (na
+lewo od muzyki, indeks 0) tylko przy połączonych słuchawkach i przesuwa indeksy
+wszystkich kart. `cardDiscord` itd. to `cardKeys.indexOf(...)`, nie stałe. Nowa karta =
+wpis w `cardKeys` + `cardSizes`. `airPodsShown` przestawia `Connections`, nie
+powiązanie: `animateCardChange` musi zgasnąć **przed** zmianą układu, inaczej
+pasek przejechałby o slot przy połączeniu słuchawek.
 
 Zasięg **musi** wyprzedzać animację. Kursor jest szybszy niż 520 ms sprężyny: gdyby
 maska szła za animacją, kursor sięgający po skrajny prawy przycisk (+191 px od środka,
@@ -187,6 +195,30 @@ i logi, na stdin komendy `mute` / `deafen` / `leave`.
 - Stan początkowy mute/deafen z `GET_VOICE_SETTINGS` po uwierzytelnieniu.
 - Test mostka bez wyspy: `python3 discord_bridge.py` (stdin EOF kończy go czysto).
   Discord musi działać, żeby cokolwiek zobaczyć — sprawdź `ls $XDG_RUNTIME_DIR/discord-ipc-*`.
+
+### AirPodsService
+
+Singleton nad `airpods_bridge.py` — protokół Apple AAP po L2CAP (PSM `0x1001`,
+`SOCK_SEQPACKET`), którego Quickshell nie otworzy. Mostek chodzi stale, pilnuje
+BlueZ przez D-Bus (UUID usługi AAP w `UUIDs` urządzenia) i sam otwiera/zamyka
+kanał. Na stdout pełne migawki `type:"state"` tylko przy zmianie, na stdin
+`{"cmd":"mode","value":"off|anc|transparency|adaptive"}`.
+
+- Pakiet ucha podaje słuchawkę główną/drugą, nie L/P. Mapowanie: pierwsza
+  słuchawka w pakiecie baterii = główna. Surowe bajty ucha są przeliczane przy
+  każdej baterii, bo główna może się zamienić.
+- Bateria `255` i status `04` = brak odczytu; trzymamy ostatni z `live: false`.
+- `arrived()` nie strzela dla połączenia zastanego przy starcie
+  (`startupGraceMs`) — instancja przeładowuje się na żywo i każda edycja
+  rozwijałaby wyspę.
+- Pauza po wyjęciu: serwis emituje `earsChanged(przed, po)` tylko przy
+  prawdziwym przejściu (pierwszy odczyt ucha po połączeniu się nie liczy),
+  a pauzuje/wznawia wyspa, bo to ona wybiera odtwarzacz. Warunek
+  `routedHere` = nazwa domyślnego sinka zawiera adres słuchawek z `_`.
+  Ustawienie `autoPause` w `airpods.json` (FileView + JsonAdapter; brak pliku
+  → zapis domyślnych).
+- Test zmiany trybu **przełącza słuchawki na uszach użytkownika** — uprzedź go
+  i przywróć tryb po pomiarze.
 
 ### ScreencastService
 
@@ -284,6 +316,12 @@ na `true` dopiero po kilku sekundach, wcześniej lista jest pusta, a
 bindowania węzła (`PwObjectTracker`), `audio` (głośność) już nie. Pigułka
 `AudioOutputChip` na karcie muzyki jest w dwóch wariantach karty (z odtwarzaczem
 i bez), oba wliczone do `controlsHovered`.
+
+Mikrofon systemowy (przełącznik `micSwitch` na karcie Discorda) wycisza **wszystkie**
+źródła `AudioSource`, nie tylko domyślne — aplikacja może słuchać innego wejścia
+(tu kamera jest domyślna, a wbudowane ALC1220 też żyje). `micOn` = którekolwiek
+nie jest wyciszone, więc OFF gwarantuje ciszę. `muted` wymaga związania węzłów
+(`PwObjectTracker` na `sources`).
 
 ### Karta łączności (Wi-Fi, Bluetooth)
 

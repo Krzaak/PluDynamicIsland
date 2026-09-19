@@ -18,6 +18,22 @@ qs -c island
 
 Logi: `qs -p . --log-times > IslandLogs.log 2>&1`
 
+### Ukrywanie skrótem klawiszowym
+
+Wyspa wystawia przez IPC cel `island` z funkcjami `toggle`, `hide`, `show`
+i `isHidden`:
+
+```sh
+qs -p ~/PluDynamicIslandQuickshell ipc call island toggle
+```
+
+Quickshell ma globalne skróty tylko pod Hyprlandem, więc w KDE skrót ustawia
+się ręcznie: **Ustawienia systemowe → Klawiatura → Skróty → Dodaj nowy →
+Polecenie lub skrypt**, wklej polecenie wyżej (z pełną ścieżką zamiast `~`)
+i przypisz klawisz. Schowana wyspa zdejmuje całe okno, więc nie łapie kursora,
+a stan przeżywa przeładowanie plików na żywo (`PersistentProperties`).
+Powiadomienia i tak trafiają do historii, tylko nie widać dymka.
+
 ## Jak to działa
 
 - **W spoczynku** — mała pigułka z miniaturką okładki tego, co gra, zegarem
@@ -57,6 +73,12 @@ Logi: `qs -p . --log-times > IslandLogs.log 2>&1`
 Wyspa pamięta ostatnio używaną kartę. Dopóki nie przewiniesz ręcznie, karta
 startowa podąża za odtwarzaczem: muzyka, gdy coś gra, inaczej zegar. Po
 zakończeniu rozmowy karta Discorda oddaje miejsce muzyce (lub zegarowi).
+
+Karta AirPodsów istnieje tylko przy połączonych słuchawkach i stoi na lewo od
+muzyki, więc indeksy wszystkich kart przesuwają się wtedy o jeden. Dlatego wyspa pamięta
+aktywną kartę po **nazwie** (`currentKey`, lista `cardKeys`), a indeks
+`currentCard` jest z niej wyprowadzony — przy indeksie trzymanym wprost
+połączenie słuchawek przełączałoby kartę pod ręką (muzyka → AirPodsy).
 
 Podczas rozmowy, gdy obok siebie stoją dwie pigułki, każda otwiera swoją kartę:
 główna muzykę (zegar, gdy nic nie gra), pigułka rozmowy Discorda. Pamięć
@@ -141,6 +163,9 @@ wyspa by się zwijała, pigułka wracała pod kursor i tak w kółko.
 | `AudioOutputChip.qml` | Pigułka z bieżącym wyjściem dźwięku na karcie muzyki. |
 | `kde_jobs_bridge.py` | Serwer `org.kde.JobViewServer` w Pythonie — postęp kopiowania i pobierania z KDE. |
 | `window_activator.py` | Podnosi okno aplikacji przez D-Bus KWina (przycisk „otwórz" w historii). |
+| `AirPodsService.qml` | Singleton: bateria, czujnik ucha i tryb redukcji hałasu AirPodsów przez mostek. |
+| `AirPodsCard.qml` | Karta AirPodsów: baterie L / P / etui i przełącznik trybu hałasu. |
+| `airpods_bridge.py` | Mostek Python ↔ AirPodsy (protokół AAP po L2CAP), pilnuje połączenia przez D-Bus BlueZ. |
 | `IslandSwitch.qml` | Przełącznik w stylu iOS (tor + gałka), zgłasza `toggled`, stanu sam nie zmienia. |
 | `discord_bridge.py` | Mostek Python ↔ lokalne RPC Discorda (gniazdo unixowe), JSON linia po linii. |
 
@@ -172,6 +197,7 @@ Na górze `DynamicIsland.qml`:
 | `noticeDuration` | `3200` | Czas auto-rozwinięcia przy zmianie utworu (ms). |
 | `notificationDuration` | `4500` | Czas auto-rozwinięcia przy nowym powiadomieniu (ms). |
 | `jobNoticeDuration` | `3000` | Czas auto-rozwinięcia na starcie transferu plików (ms). |
+| `airPodsNoticeDuration` | `3500` | Czas auto-rozwinięcia po połączeniu AirPodsów (ms). |
 | `jobBarGap` | `4` | Przerwa między wyspą a paskiem postępu pod nią (px). |
 | `wheelStepDelta` | `120` | Ile `angleDelta` kółka na jedną kartę (120 = jeden ząbek). |
 | `wheelCooldownMs` | `260` | Blokada kolejnego przeskoku po zmianie karty (ms). |
@@ -461,6 +487,57 @@ i blokuje rfkill, żeby aplet KDE pokazywał to samo, co wyspa.
 Zmierzone: moduły Quickshella ładują dane asynchronicznie — adapter pojawia się
 1–6 s po starcie, a tuż po pojawieniu zgłasza przejściowo stan `Enabling`
 (karta pokazuje wtedy „Przełączanie…" i blokuje przełącznik na ułamek sekundy).
+
+## AirPodsy
+
+Karta na lewo od muzyki, **tylko gdy słuchawki są połączone**: baterie lewej,
+prawej i etui, przełącznik trybu (wyłączone / redukcja / przezroczystość /
+adaptacyjny) i przełącznik pauzy po wyjęciu z ucha. Stan mówią ikony:
+słuchawka niebieska = w uchu, jasna = poza uchem, ciemna = w etui,
+błyskawica = ładuje; nazwa trybu stoi w nagłówku.
+
+**Pauza po wyjęciu** (domyślnie włączona, zapis w
+`~/.config/quickshell-island/airpods.json`): wyjęcie słuchawki pauzuje muzykę,
+włożenie wznawia — tylko to, co wyspa sama zapauzowała, i tylko gdy w uszach
+jest znów tyle słuchawek, ile przed pauzą. Działa wyłącznie wtedy, gdy
+domyślne wyjście dźwięku to AirPodsy (nazwa sinka `bluez_output.<adres>`) —
+muzyka z głośników nie staje, bo ktoś zdjął słuchawki leżące obok. Ręczne
+play/pauza albo rozłączenie słuchawek kasuje zamiar wznowienia. Po połączeniu słuchawek
+wyspa rozwija się na tej karcie na `airPodsNoticeDuration` i wraca do poprzedniej.
+
+Dane idą własnym protokołem Apple (AAP) po kanale L2CAP (PSM `0x1001`), którego
+BlueZ nie wystawia, a Quickshell nie umie otworzyć — robi to `airpods_bridge.py`
+(protokół za [LibrePods](https://github.com/kavishdevar/librepods)). Mostek
+chodzi stale i sam pilnuje BlueZ przez D-Bus: urządzenie z usługą
+`74ec2172-0bad-4d01-8f77-997b2be0722a` połączone → otwiera kanał, handshake,
+prośba o powiadomienia; rozłączone → zamyka. Bez roota.
+
+Zmierzone na AirPods A3439 (product id `0x2030`, firmware 1.0.0):
+
+- Wszystko przychodzi **samo, na żywo** (ucho, tryb, bateria) w ciągu ~1 s od
+  zdarzenia — nie trzeba odpytywać.
+- Zmiana trybu z komputera: potwierdzenie po 1,0–1,6 s. Karta podświetla
+  wybrany tryb przygaszony, dopóki słuchawki go nie potwierdzą
+  (`modeConfirmTimeoutMs` w `AirPodsService.qml`).
+- Wyjęcie jednej słuchawki **samo** przełącza tryb na „wyłączone", a włożenie
+  wraca do poprzedniego. Karta pokazuje to, co raportują słuchawki.
+- Pakiet ucha mówi o słuchawce „głównej" i „drugiej", nie lewej i prawej.
+  Główna = pierwsza słuchawka w pakiecie baterii (zmierzone: główna w etui →
+  ładuje się prawa, a prawa szła w pakiecie pierwsza). Nie sprawdzone, czy
+  kolejność idzie za zamianą głównej — gdyby lewa i prawa zamieniały się
+  miejscami przy wyjmowaniu, tu jest przyczyna.
+- Etui raportuje baterię tylko otwarte i ze słuchawką w środku; przez chwilę
+  po otwarciu przychodzi `255` (nieznane). Poza tym status `04` = nie raportuje,
+  karta trzyma wtedy ostatni odczyt przygaszony.
+- Dwa klienty AAP naraz (np. dwie instancje wyspy) działają obok siebie.
+  LibrePods razem z wyspą — niesprawdzone.
+
+Ręczny test mostka bez wyspy (stdin EOF kończy go czysto):
+
+```sh
+python3 airpods_bridge.py
+(sleep 5; echo '{"cmd":"mode","value":"transparency"}'; sleep 3) | python3 airpods_bridge.py
+```
 
 ## Wizualizacja dźwięku (cava)
 

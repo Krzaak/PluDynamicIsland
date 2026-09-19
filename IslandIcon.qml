@@ -9,13 +9,27 @@ Item {
     // "play" | "pause" | "next" | "prev"
     // | "mic" | "micOff" | "headset" | "headsetOff" | "callEnd" | "discord"
     // | "wifi" | "bluetooth" | "phone" | "keyboard" | "mouse" | "computer"
-    // | "gamepad" | "speaker" | "refresh" | "open"
+    // | "gamepad" | "speaker" | "refresh" | "open" | "bolt"
+    // | "budLeft" | "budRight" | "budCase"
+    // | "noiseOff" | "noiseAnc" | "noiseTransparency" | "noiseAdaptive"
     property string kind: "play"
     property real size: 14
     property color color: "#ffffff"
 
     // Wszystkie ścieżki w siatce 24x24. Ikony Discorda to Material Icons
     // (Apache 2.0), logo z Simple Icons (CC0).
+    //
+    // Słuchawki, etui i tryby hałasu są własne. Wypełnienie to WindingFill,
+    // więc dziurę (pierścień) robi wewnętrzny kontur w PRZECIWNYM kierunku
+    // (łuk z flagą sweep 0), a elementy nakładane na pierścień (kreska "off")
+    // muszą iść w tym samym kierunku co kontur zewnętrzny — inaczej w miejscu
+    // przecięcia wycięłyby dziurę.
+    //
+    // Słuchawki to JEDEN kontur (głowa + nóżka), nie koło i prostokąt
+    // nałożone na siebie: nóżka styczna do koła rysowała się w
+    // CurveRendererze krzywo (prawa słuchawka miała "dziwną" nóżkę).
+    // Punkty styku to przecięcia krawędzi nóżki (x = 12 / 15) z kołem
+    // o środku (10, 8) i r = 5.5; lewa to lustro względem x = 12.
     readonly property var paths: ({
         "play":  "M 8 5 L 19 12 L 8 19 Z",
         "pause": "M 8 5 H 11 V 19 H 8 Z M 13 5 H 16 V 19 H 13 Z",
@@ -38,6 +52,14 @@ Item {
         "download": "M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z",
         "close": "M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
         "open": "M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z",
+        "bolt": "M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z",
+        "budLeft": "M12 13.12V19.5a1.5 1.5 0 0 1-3 0V10.29A5.5 5.5 0 1 1 12 13.12z",
+        "budRight": "M15 10.29V19.5a1.5 1.5 0 0 1-3 0V13.12A5.5 5.5 0 1 1 15 10.29z",
+        "budCase": "M4 9a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v1.5H4z M4 12h16v5a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z",
+        "noiseOff": "M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18z M12 4.8a7.2 7.2 0 1 0 0 14.4a7.2 7.2 0 1 0 0-14.4z M5.6 4.2L19.8 18.4L18.4 19.8L4.2 5.6z",
+        "noiseAnc": "M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18z",
+        "noiseTransparency": "M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18z M12 4.8a7.2 7.2 0 1 0 0 14.4a7.2 7.2 0 1 0 0-14.4z",
+        "noiseAdaptive": "M12 3a9 9 0 1 1 0 18a9 9 0 1 1 0-18z M12 4.8a7.2 7.2 0 1 0 0 14.4a7.2 7.2 0 1 0 0-14.4z M12 6.5a5.5 5.5 0 0 0 0 11z",
         "refresh": "M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z",
         "discord": "M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"
     })

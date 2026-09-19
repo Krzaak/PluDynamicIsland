@@ -1,10 +1,34 @@
 //@ pragma UseQApplication
 
 import Quickshell
+import Quickshell.Io
 
 // Punkt wejścia. Uruchom:  qs -p ~/PluDynamicIslandQuickshell
 ShellRoot {
     id: root
+
+    // Ukrywanie wyspy z zewnątrz, np. skrótem klawiszowym:
+    //   qs -p ~/PluDynamicIslandQuickshell ipc call island toggle
+    //
+    // Quickshell ma globalne skróty tylko dla Hyprlanda (GlobalShortcut), więc
+    // w KDE skrót podpina się w Ustawieniach systemowych jako polecenie.
+    // Stan w PersistentProperties, bo instancja przeładowuje pliki na żywo —
+    // zwykła właściwość wracałaby do false i schowana wyspa wyskakiwała po edycji.
+    PersistentProperties {
+        id: persist
+        reloadableId: "islandState"
+
+        property bool hidden: false
+    }
+
+    IpcHandler {
+        target: "island"
+
+        function toggle(): void { persist.hidden = !persist.hidden; }
+        function hide(): void { persist.hidden = true; }
+        function show(): void { persist.hidden = false; }
+        function isHidden(): bool { return persist.hidden; }
+    }
 
     // Monitor, na którym ma siedzieć wyspa.
     //
@@ -31,6 +55,8 @@ ShellRoot {
     Variants {
         model: root.targetScreens
 
-        DynamicIsland {}
+        DynamicIsland {
+            hiddenByUser: persist.hidden
+        }
     }
 }

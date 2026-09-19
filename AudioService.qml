@@ -53,20 +53,54 @@ Singleton {
         selectSink(s[i]);
     }
 
+    // ---- mikrofon ----
+    // Wyciszenie "systemowe" obejmuje WSZYSTKIE źródła, nie tylko domyślne:
+    // aplikacja może być przypięta do innego mikrofonu (tu: kamera jest
+    // domyślna, a obok żyje wbudowane wejście), więc wyciszenie samego
+    // domyślnego zostawiałoby otwarty mikrofon za plecami przełącznika.
+    //
+    // Z tego samego powodu "włączony" znaczy "którykolwiek nie jest wyciszony" —
+    // OFF ma gwarantować, że nic nie słucha.
+    readonly property alias sources: priv.sources
+    readonly property bool micReady: priv.boundSources.length > 0
+    readonly property bool micOn: {
+        const s = priv.boundSources;
+        for (let i = 0; i < s.length; i++)
+            if (!s[i].audio.muted) return true;
+        return false;
+    }
+
+    function setMicOn(on) {
+        const s = priv.boundSources;
+        for (let i = 0; i < s.length; i++) s[i].audio.muted = !on;
+    }
+
+    // `audio` (a z nim `muted`) istnieje tylko dla węzłów związanych przez
+    // tracker — do tego czasu jest null.
+    PwObjectTracker {
+        objects: priv.sources
+    }
+
     QtObject {
         id: priv
         property var sinks: []
+        property var sources: []
+        readonly property var boundSources: sources.filter(n => n.ready && n.audio !== null)
     }
 
     function rebuild() {
         const v = Pipewire.nodes.values;
-        const out = [];
+        const outSinks = [];
+        const outSources = [];
         for (let i = 0; i < v.length; i++) {
             const n = v[i];
+            if (n.isStream) continue;
             // AudioSink = Audio | Sink; strumienie aplikacji mają jeszcze bit Stream.
-            if (n.isSink && !n.isStream && n.type === PwNodeType.AudioSink) out.push(n);
+            if (n.isSink && n.type === PwNodeType.AudioSink) outSinks.push(n);
+            else if (n.type === PwNodeType.AudioSource) outSources.push(n);
         }
-        priv.sinks = out;
+        priv.sinks = outSinks;
+        priv.sources = outSources;
     }
 
     Connections {
