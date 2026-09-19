@@ -70,6 +70,19 @@ Singleton {
     // i nie może wznawiać muzyki, którą użytkownik sam zapauzował.
     signal earsChanged(int previous, int current)
 
+    // Gest nóżki rozpoznany przez mostek: "playpause" | "next" | "previous".
+    // Wykonuje go wyspa, bo to ona wybiera odtwarzacz (punktacja MPRIS).
+    signal mediaAction(string action)
+
+    // Stan odtwarzania do zameldowania słuchawkom (ustawia wyspa przez
+    // Binding). Mostek podaje go BlueZ jako status swojego odtwarzacza AVRCP.
+    property bool playing: false
+    onPlayingChanged: sendPlayback()
+
+    function sendPlayback() {
+        if (proc.running) proc.write(JSON.stringify({ cmd: "playback", playing: root.playing }) + "\n");
+    }
+
     QtObject {
         id: priv
         property bool connected: false
@@ -149,6 +162,8 @@ Singleton {
 
                 if (msg.type === "log") {
                     console.log("[airpods] " + msg.text);
+                } else if (msg.type === "media") {
+                    root.mediaAction(msg.action);
                 } else if (msg.type === "state") {
                     const was = priv.connected;
                     const earKnown = priv.leftEar !== "" && priv.rightEar !== "";
@@ -188,7 +203,10 @@ Singleton {
             }
         }
 
-        onStarted: priv.startedAt = Date.now()
+        onStarted: {
+            priv.startedAt = Date.now();
+            root.sendPlayback();
+        }
 
         // Mostek kończy się sam tylko przy zamkniętym stdin, więc każde wyjście
         // w trakcie działania to awaria (albo SIGTERM przy zamykaniu Quickshella —

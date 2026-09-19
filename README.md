@@ -529,6 +529,17 @@ Zmierzone na AirPods A3439 (product id `0x2030`, firmware 1.0.0):
 - Etui raportuje baterię tylko otwarte i ze słuchawką w środku; przez chwilę
   po otwarciu przychodzi `255` (nieznane). Poza tym status `04` = nie raportuje,
   karta trzyma wtedy ostatni odczyt przygaszony.
+- **Klik w nóżkę**: AirPodsy 5 nie rozpoznają same podwójnego/potrójnego
+  kliku — każde wciśnięcie idzie osobno jako AVRCP play/pauza, a gest liczy
+  host. KDE wykonywało każde od razu (podwójny klik = pauza + wznowienie;
+  zmierzone przez `kglobalaccel` na D-Bus). Mostek na czas połączenia
+  rejestruje w BlueZ własny odtwarzacz (`Media1.RegisterPlayer`, jak
+  `mpris-proxy`) — przyciski trafiają wtedy do niego, a nie na klawiaturę
+  (zmierzone: KDE nie dostaje wtedy nic). Gest: 1 = play/pauza, 2 = następny,
+  3 = poprzedni, zamknięty po `STEM_GAP_MS` = 700 ms ciszy. Zmierzone odstępy
+  w geście: 0,39–0,56 s. Przytrzymanie nóżki (zmiana trybu) robią słuchawki
+  same. Rejestracja przejmuje przyciski **wszystkich** słuchawek na adapterze,
+  więc trwa tylko przy połączonych AirPodsach.
 - Dwa klienty AAP naraz (np. dwie instancje wyspy) działają obok siebie.
   LibrePods razem z wyspą — niesprawdzone.
 

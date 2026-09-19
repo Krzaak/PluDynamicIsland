@@ -417,6 +417,26 @@ PanelWindow {
         }
     }
 
+    // Klik w nóżkę (1 = play/pauza, 2 = następny, 3 = poprzedni). Gest liczy
+    // mostek — AirPodsy wysyłają każde wciśnięcie osobno.
+    Connections {
+        target: AirPodsService
+
+        function onMediaAction(action) {
+            if (!root.hasPlayer) return;
+            const p = root.player;
+            if (action === "playpause" && p.canTogglePlaying) p.togglePlaying();
+            else if (action === "next" && p.canGoNext) p.next();
+            else if (action === "previous" && p.canGoPrevious) p.previous();
+        }
+    }
+
+    Binding {
+        target: AirPodsService
+        property: "playing"
+        value: root.isPlaying
+    }
+
     // Muzyka zapauzowana przez wyjęcie słuchawki — do wznowienia po włożeniu.
     // Gaśnie, gdy użytkownik sam coś zrobi z odtwarzaniem albo słuchawki
     // się rozłączą; inaczej włożenie słuchawek godzinę później puściłoby

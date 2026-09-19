@@ -15,7 +15,18 @@ o tym, które urządzenie to AirPodsy.
   stdout -> QML : {"type":"state", connected, name, address, noiseMode,
                    left/right/case: {level, charging, live}, leftEar, rightEar}
                   {"type":"log", "text": "..."}
+                  {"type":"media", "action":"playpause|next|previous"}
   stdin  <- QML : {"cmd":"mode","value":"off|anc|transparency|adaptive"}
+                  {"cmd":"playback","playing":bool}
+
+Klik w nóżkę: AirPodsy 5 NIE rozpoznają same podwójnego/potrójnego kliku —
+każde wciśnięcie wysyłają osobno jako AVRCP play/pauza, a gest liczy host
+(iPhone). BlueZ zamienia to domyślnie na klawisz multimedialny i KDE wykonuje
+każde wciśnięcie od razu, więc podwójny klik = pauza + wznowienie. Dlatego na
+czas połączenia mostek rejestruje w BlueZ własny odtwarzacz (Media1.RegisterPlayer,
+jak mpris-proxy): komendy AVRCP trafiają wtedy do niego zamiast na klawiaturę
+(zmierzone: KDE nie dostaje wtedy nic), mostek liczy wciśnięcia i wysyła QML-owi
+gotową akcję — wyspa wykonuje ją na wybranym przez siebie odtwarzaczu.
 
 level = -1, gdy nigdy nie przyszedł odczyt; live = false, gdy element nie
 raportuje (etui zamknięte / poza zasięgiem) i level to ostatnia znana wartość.
@@ -29,6 +40,7 @@ import socket
 import sys
 
 import dbus
+import dbus.service
 from dbus.mainloop.glib import DBusGMainLoop
 from gi.repository import GLib
 
@@ -44,6 +56,12 @@ AAP_PSM = 0x1001
 CONNECT_DELAY_MS = 1500     # po Connected=true kanał AAP bywa jeszcze niegotowy
 RETRY_MS = 5000             # kolejna próba, dopóki urządzenie jest połączone
 CONNECT_TIMEOUT_S = 5
+
+# Po tylu ms od ostatniego wciśnięcia nóżki gest jest zamknięty: 1 = play/pauza,
+# 2 = następny, 3 = poprzedni. Zmierzone odstępy w podwójnym i potrójnym kliku:
+# 0,39–0,56 s — krótsze okno rozbijałoby wolniejszy podwójny klik na dwa
+# pojedyncze. Tyle też trwa opóźnienie pojedynczego kliku.
+STEM_GAP_MS = 700
 
 # ---------------------------------------------------------------
 # Protokół
@@ -120,6 +138,113 @@ def log(text):
 
 
 # ---------------------------------------------------------------
+# Odtwarzacz dla BlueZ (przejmowanie klików w nóżkę)
+# ---------------------------------------------------------------
+
+PLAYER_PATH = "/org/quickshell/island/airpods_player"
+PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
+
+
+class StemPlayer(dbus.service.Object):
+    """Minimalny odtwarzacz MPRIS, którego BlueZ używa jako celu AVRCP.
+    Nic nie odtwarza — tylko liczy wciśnięcia i melduje stan słuchawkom."""
+
+    def __init__(self, bus, on_action):
+        super().__init__(bus, PLAYER_PATH)
+        self.on_action = on_action
+        self.playing = False
+        self.presses = 0
+        self.gap_source = None
+
+    def props(self):
+        return {
+            "PlaybackStatus": dbus.String("Playing" if self.playing else "Paused"),
+            "LoopStatus": dbus.String("None"),
+            "Shuffle": dbus.Boolean(False),
+            "Position": dbus.Int64(0),
+            "Rate": dbus.Double(1.0),
+            "Metadata": dbus.Dictionary({"mpris:trackid": dbus.ObjectPath("/org/quickshell/island/track")},
+                                        signature="sv"),
+            "CanGoNext": dbus.Boolean(True),
+            "CanGoPrevious": dbus.Boolean(True),
+            "CanPlay": dbus.Boolean(True),
+            "CanPause": dbus.Boolean(True),
+            "CanSeek": dbus.Boolean(False),
+            "CanControl": dbus.Boolean(True),
+        }
+
+    def set_playing(self, playing):
+        if playing == self.playing:
+            return
+        self.playing = playing
+        self.PropertiesChanged(PLAYER_IFACE, {"PlaybackStatus": self.props()["PlaybackStatus"]}, [])
+
+    # ---- liczenie gestu ----
+
+    def press(self):
+        self.presses += 1
+        if self.gap_source is not None:
+            GLib.source_remove(self.gap_source)
+        self.gap_source = GLib.timeout_add(STEM_GAP_MS, self.finish_gesture)
+
+    def finish_gesture(self):
+        self.gap_source = None
+        n, self.presses = self.presses, 0
+        self.on_action({1: "playpause", 2: "next"}.get(n, "previous"))
+        return False
+
+    # ---- D-Bus ----
+
+    @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="ss", out_signature="v")
+    def Get(self, iface, name):
+        return self.props()[name]
+
+    @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="s", out_signature="a{sv}")
+    def GetAll(self, iface):
+        return self.props() if iface == PLAYER_IFACE else {}
+
+    @dbus.service.method("org.freedesktop.DBus.Properties", in_signature="ssv")
+    def Set(self, iface, name, value):
+        pass
+
+    @dbus.service.signal("org.freedesktop.DBus.Properties", signature="sa{sv}as")
+    def PropertiesChanged(self, iface, changed, invalidated):
+        pass
+
+    # Słuchawki wysyłają Play albo Pause zależnie od tego, co myślą o stanie
+    # (zmierzone: bywa samo Play) — oba to po prostu wciśnięcie.
+    @dbus.service.method(PLAYER_IFACE)
+    def Play(self):
+        self.press()
+
+    @dbus.service.method(PLAYER_IFACE)
+    def Pause(self):
+        self.press()
+
+    @dbus.service.method(PLAYER_IFACE)
+    def PlayPause(self):
+        self.press()
+
+    @dbus.service.method(PLAYER_IFACE)
+    def Stop(self):
+        pass
+
+    # Inne słuchawki podłączone w tym samym czasie mają własne przyciski
+    # następny/poprzedni — te przechodzą wprost.
+    @dbus.service.method(PLAYER_IFACE)
+    def Next(self):
+        self.on_action("next")
+
+    @dbus.service.method(PLAYER_IFACE)
+    def Previous(self):
+        self.on_action("previous")
+
+    @dbus.service.method(PLAYER_IFACE, in_signature="x")
+    def Seek(self, offset):
+        pass
+
+
+# ---------------------------------------------------------------
 # Mostek
 # ---------------------------------------------------------------
 
@@ -140,6 +265,9 @@ class Bridge:
         # więc surowe bajty ucha trzymamy i przeliczamy przy każdej baterii.
         self.primary_is_right = True
         self.raw_ear = None
+
+        self.player = StemPlayer(self.bus, lambda action: emit({"type": "media", "action": action}))
+        self.player_adapter = None     # ścieżka adaptera, na którym jest zarejestrowany
 
         self.bus.add_signal_receiver(
             self.on_properties_changed,
@@ -263,10 +391,38 @@ class Bridge:
         state["address"] = address
         self.raw_ear = None
         log(f"połączono z {state['name']}")
+        self.register_player(self.device_path.rsplit("/", 1)[0])
         emit_state()
         return False
 
+    # ---- odtwarzacz AVRCP ----
+    # Tylko na czas połączenia z AirPodsami: zarejestrowany odtwarzacz
+    # przejmuje przyciski WSZYSTKICH słuchawek na adapterze, więc bez AirPodsów
+    # inne słuchawki mają działać po staremu, przez klawisze KDE. Gdy mostek
+    # padnie, BlueZ sam wyrejestruje odtwarzacz (śledzi właściciela na D-Bus).
+
+    def register_player(self, adapter):
+        if self.player_adapter is not None:
+            return
+        try:
+            media = dbus.Interface(self.bus.get_object("org.bluez", adapter), "org.bluez.Media1")
+            media.RegisterPlayer(dbus.ObjectPath(PLAYER_PATH), self.player.props())
+            self.player_adapter = adapter
+        except dbus.DBusException as e:
+            log(f"nie udało się przejąć przycisków słuchawek: {e.get_dbus_message()}")
+
+    def unregister_player(self):
+        if self.player_adapter is None:
+            return
+        try:
+            media = dbus.Interface(self.bus.get_object("org.bluez", self.player_adapter), "org.bluez.Media1")
+            media.UnregisterPlayer(dbus.ObjectPath(PLAYER_PATH))
+        except dbus.DBusException:
+            pass   # adapter zniknął razem z rejestracją
+        self.player_adapter = None
+
     def close_session(self):
+        self.unregister_player()
         if self.sock_watch is not None:
             GLib.source_remove(self.sock_watch)
             self.sock_watch = None
@@ -372,7 +528,9 @@ class Bridge:
         except ValueError:
             log(f"śmieci na stdin: {line[:80]!r}")
             return True
-        if cmd.get("cmd") == "mode":
+        if cmd.get("cmd") == "playback":
+            self.player.set_playing(bool(cmd.get("playing")))
+        elif cmd.get("cmd") == "mode":
             code = NOISE_BY_NAME.get(cmd.get("value"))
             if code is None:
                 log(f"nieznany tryb: {cmd.get('value')}")

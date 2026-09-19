@@ -217,6 +217,12 @@ kanał. Na stdout pełne migawki `type:"state"` tylko przy zmianie, na stdin
   `routedHere` = nazwa domyślnego sinka zawiera adres słuchawek z `_`.
   Ustawienie `autoPause` w `airpods.json` (FileView + JsonAdapter; brak pliku
   → zapis domyślnych).
+- Klik w nóżkę: słuchawki wysyłają każde wciśnięcie jako osobne AVRCP
+  play/pauza (gestu nie liczą same). Mostek rejestruje w BlueZ odtwarzacz
+  (`Media1.RegisterPlayer`) tylko na czas sesji AAP — wtedy AVRCP omija
+  uinput i KDE — liczy wciśnięcia (`STEM_GAP_MS`) i wysyła
+  `{"type":"media","action":...}`; wykonuje wyspa (`onMediaAction`), stan
+  odtwarzania wraca do mostka przez `AirPodsService.playing`.
 - Test zmiany trybu **przełącza słuchawki na uszach użytkownika** — uprzedź go
   i przywróć tryb po pomiarze.
 
