@@ -80,6 +80,39 @@ Singleton {
         if (volumeReady) current.audio.muted = !current.audio.muted;
     }
 
+    // ---- zmiana głośności spoza wyspy ----
+    // Klawisze multimedialne, pavucontrol, cokolwiek. Wyspa pokazuje po tym
+    // pasek w zwiniętej pigułce, jak HUD głośności w iOS.
+    signal volumeNudged()
+
+    // Pierwszy odczyt po starcie i po przełączeniu wyjścia NIE jest zmianą:
+    // wartość skacze z zera na rzeczywistą albo na głośność innego urządzenia,
+    // a wyspa mrugałaby paskiem bez powodu. -1 = nie mamy jeszcze punktu
+    // odniesienia, więc najbliższy odczyt tylko go ustawia.
+    property real knownVolume: -1
+    property bool knownMuted: false
+
+    onCurrentChanged: knownVolume = -1
+    onVolumeReadyChanged: if (!volumeReady) knownVolume = -1
+
+    onVolumeChanged: noteVolume()
+    onMutedChanged: noteVolume()
+
+    function noteVolume() {
+        if (!volumeReady) return;
+
+        const hadBaseline = knownVolume >= 0;
+        // Porównanie z tolerancją: głośność to float i PipeWire potrafi
+        // przysłać tę samą wartość z drobną różnicą na końcówce.
+        const changed = hadBaseline
+            && (Math.abs(volume - knownVolume) > 0.0005 || muted !== knownMuted);
+
+        knownVolume = volume;
+        knownMuted = muted;
+
+        if (changed) root.volumeNudged();
+    }
+
     PwObjectTracker {
         objects: root.current ? [root.current] : []
     }

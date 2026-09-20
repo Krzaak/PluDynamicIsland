@@ -219,6 +219,7 @@ Na górze `DynamicIsland.qml`:
 | `notificationDuration` | `4500` | Czas auto-rozwinięcia przy nowym powiadomieniu (ms). |
 | `jobNoticeDuration` | `3000` | Czas auto-rozwinięcia na starcie transferu plików (ms). |
 | `airPodsNoticeDuration` | `3500` | Czas auto-rozwinięcia po połączeniu AirPodsów (ms). |
+| `volumeNoticeDuration` | `1400` | Jak długo zwinięta pigułka pokazuje pasek głośności (ms). |
 | `jobBarGap` | `4` | Przerwa między wyspą a paskiem postępu pod nią (px). |
 | `wheelStepDelta` | `120` | Ile `angleDelta` kółka na jedną kartę (120 = jeden ząbek). |
 | `wheelCooldownMs` | `260` | Blokada kolejnego przeskoku po zmianie karty (ms). |
@@ -757,6 +758,25 @@ dokąd leci dźwięk. Pigułka robi podwójną robotę:
 Skala to 0–1 liniowo, ta sama co w `wpctl get-volume` (zmierzone: 0,75 po obu
 stronach). Głośność dotyczy **wyjścia**, nie odtwarzacza — działa też wtedy,
 gdy nic nie gra (pigułka jest wtedy na karcie „Nic nie gra").
+
+### Pasek głośności w zwiniętej pigułce
+
+Zmiana głośności **spoza wyspy** — klawiszami multimedialnymi, z pavucontrol,
+czymkolwiek — zamienia na `volumeNoticeDuration` (1,4 s) treść **zwiniętej**
+pigułki na pasek: ikona, poziom i procent. Wyspa się przy tym nie rozwija ani
+nie zmienia rozmiaru (zmierzone: 168 × 34 przed, w trakcie i po), więc nic nie
+skacze na ekranie — to ma być zerknięcie, a nie wyskakujące okno pod kursorem.
+
+Pasek NIE pokazuje się, gdy wyspa jest rozwinięta: widać wtedy pigułkę wyjścia
+z tą samą informacją, a przykrycie karty paskiem byłoby krokiem wstecz.
+Najechanie kursorem w trakcie pokazywania paska od razu go chowa — skoro
+sięgasz po kartę, to jej chcesz.
+
+Pierwszy odczyt po starcie i po przełączeniu wyjścia **nie** liczy się jako
+zmiana: wartość skacze wtedy z zera na rzeczywistą albo na głośność innego
+urządzenia, a wyspa mrugałaby paskiem bez powodu. Zmierzone: zero fałszywych
+wyzwoleń przez pierwsze 7 s po starcie, mimo że głośność idzie w tym czasie
+z 0% na 63%.
 
 Obrót kółka jest **sumowany** do pełnego ząbka (`volumeWheelDelta`, 120 jednostek
 `angleDelta`), a nie stosowany od razu — tak samo jak przy przewijaniu kart.

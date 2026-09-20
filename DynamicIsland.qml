@@ -33,6 +33,7 @@ PanelWindow {
     property int notificationDuration: 4500   // ...przy nowym powiadomieniu
     property int jobNoticeDuration: 3000      // ...na starcie transferu plików
     property int airPodsNoticeDuration: 3500  // ...po połączeniu AirPodsów
+    property int volumeNoticeDuration: 1400   // jak długo zwinięta pigułka pokazuje pasek głośności
     property int jobBarGap: 4                 // przerwa między wyspą a paskiem postępu pod nią
 
     // Dogładzanie słupków widma po stronie QML. Przy 60 fps klatka przychodzi
@@ -177,6 +178,35 @@ PanelWindow {
     }
     property bool pinned: false
     property bool notice: false   // krótkie auto-rozwinięcie, "powiadomienie"
+
+    // ---- pasek głośności w zwiniętej pigułce ----
+    // Zmiana głośności spoza wyspy (klawisze multimedialne, pavucontrol)
+    // zamienia na chwilę treść ZWINIĘTEJ pigułki na pasek — jak HUD głośności
+    // w iOS. Wyspa się przy tym NIE rozwija: to ma być zerknięcie, a nie
+    // wyskakujące okno pod kursorem.
+    property bool volumeNotice: false
+
+    Connections {
+        target: AudioService
+
+        function onVolumeNudged() {
+            // Rozwinięta wyspa i tak pokazuje głośność w pigułce wyjścia,
+            // a przykrycie karty paskiem byłoby krokiem wstecz.
+            if (root.expanded) return;
+            root.volumeNotice = true;
+            volumeNoticeTimer.restart();
+        }
+    }
+
+    Timer {
+        id: volumeNoticeTimer
+        interval: root.volumeNoticeDuration
+        onTriggered: root.volumeNotice = false
+    }
+
+    // Najechanie na wyspę w trakcie pokazywania paska: użytkownik chce kartę,
+    // nie HUD. Bez tego pasek wracałby po zjechaniu kursorem, na resztę czasu.
+    onExpandedChanged: if (expanded) root.volumeNotice = false
 
     // ---- nakładki (Wi-Fi, Bluetooth) ----
     // "" | "wifi" | "bluetooth". Nakładka zastępuje pasek kart i rozciąga
@@ -664,13 +694,76 @@ PanelWindow {
             onTriggered: wheel.accum = 0
         }
 
+        // ---- widok zwinięty: pasek głośności ---------------------------
+        // Zamiast zegara, na volumeNoticeDuration po zmianie głośności
+        // spoza wyspy. Ta sama pigułka, tylko inna treść — bez rozwijania
+        // i bez zmiany rozmiaru, więc nic nie skacze na ekranie.
+        RowLayout {
+            anchors.centerIn: parent
+            width: root.collapsedWidth - 28
+            spacing: 8
+
+            opacity: (!root.expanded && root.volumeNotice) ? 1 : 0
+            visible: opacity > 0.01
+
+            Behavior on opacity {
+                NumberAnimation { duration: 170; easing.type: Easing.OutCubic }
+            }
+
+            IslandIcon {
+                Layout.alignment: Qt.AlignVCenter
+                kind: AudioService.muted ? "volumeOff"
+                    : (AudioService.volume < 0.5 ? "volumeLow" : "volume")
+                size: 14
+                color: AudioService.muted ? "#e5484d" : "#f2f2f2"
+                Behavior on color { ColorAnimation { duration: 140 } }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 4
+                Layout.alignment: Qt.AlignVCenter
+                radius: 2
+                antialiasing: true
+                color: Qt.rgba(1, 1, 1, 0.16)
+
+                Rectangle {
+                    width: parent.width * Math.max(0, Math.min(1, AudioService.volume))
+                    height: parent.height
+                    radius: parent.radius
+                    antialiasing: true
+                    // Wyciszone: pasek zostaje, ale przygaszony — widać poziom,
+                    // do którego wróci odciszenie.
+                    color: AudioService.muted ? "#5a5a62" : "#ededf0"
+
+                    Behavior on width {
+                        NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                    }
+                    Behavior on color { ColorAnimation { duration: 160 } }
+                }
+            }
+
+            // Stała szerokość, żeby pasek nie drgał przy przejściu
+            // z "9%" na "100%".
+            Text {
+                Layout.preferredWidth: 30
+                Layout.alignment: Qt.AlignVCenter
+                horizontalAlignment: Text.AlignRight
+                text: Math.round(AudioService.volume * 100) + "%"
+                color: AudioService.muted ? "#78787f" : "#f2f2f2"
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+                Behavior on color { ColorAnimation { duration: 140 } }
+            }
+        }
+
         // ---- widok zwinięty: sam zegar + kropka statusu ----------------
 
         RowLayout {
             anchors.centerIn: parent
             spacing: 7
 
-            opacity: root.expanded ? 0 : 1
+            opacity: (root.expanded || root.volumeNotice) ? 0 : 1
             visible: opacity > 0.01
 
             Behavior on opacity {

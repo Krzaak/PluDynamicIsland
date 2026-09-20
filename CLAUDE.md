@@ -506,6 +506,22 @@ wartości w rodzaju 0,4733 i ten sam ruch dwa razy daje inny wynik.
 Pigułka to `ClippingRectangle`, nie `Rectangle`: `clip: true` na `Rectangle`
 z `radius` przycina PROSTOKĄTNIE i wypełnienie wystawałoby poza zaokrąglone rogi.
 
+`AudioService.volumeNudged()` zgłasza zmianę głośności **spoza wyspy**, a wyspa
+zamienia po nim na chwilę treść zwiniętej pigułki na pasek (`volumeNotice`).
+Dwie pułapki:
+
+- **Pierwszy odczyt nie jest zmianą.** Po starcie głośność skacze z zera na
+  rzeczywistą, a po przełączeniu wyjścia — na głośność innego urządzenia.
+  Stąd `knownVolume = -1` jako "brak punktu odniesienia": najbliższy odczyt
+  tylko go ustawia. Bez tego wyspa mrugałaby paskiem przy każdym starcie
+  i przy każdej zmianie sinka.
+- **Pasek nie pokazuje się przy rozwiniętej wyspie** — widać wtedy pigułkę
+  wyjścia z tą samą informacją. `onExpandedChanged` gasi też pasek w trakcie,
+  inaczej wracałby po zjechaniu kursorem, na resztę czasu.
+
+Pigułka zostaje przy `collapsedWidth × collapsedHeight` (zmierzone: 168 × 34
+przed, w trakcie i po) — zmiana rozmiaru zrobiłaby z zerknięcia skaczące okno.
+
 Mikrofon systemowy (przełącznik `micSwitch` na karcie Discorda) wycisza **wszystkie**
 źródła `AudioSource`, nie tylko domyślne — aplikacja może słuchać innego wejścia
 (tu kamera jest domyślna, a wbudowane ALC1220 też żyje). `micOn` = którekolwiek
