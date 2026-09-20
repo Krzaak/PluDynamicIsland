@@ -1,13 +1,18 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
-import Quickshell.Io
 import Quickshell.Bluetooth
 import Quickshell.Networking
 
 // Karta "łączność": przełączniki Wi-Fi i Bluetooth po lewej, przewijana
 // lista urządzeń Bluetooth po prawej (sparowane + znalezione przy skanowaniu),
 // z poziomem baterii tam, gdzie urządzenie go zgłasza.
+//
+// Karta jest PODGLĄDEM i szybkim przełącznikiem. Wszystko, co wymaga
+// wpisywania — hasło do nowej sieci, PIN przy parowaniu — dzieje się
+// w nakładkach (WifiPanel, BluetoothPanel), które karta otwiera sygnałami
+// openWifi / openBluetooth. Nakładka nie zmieściłaby się w slocie karuzeli
+// (slotWidth = 440), a podniesienie slotu przestawiłoby wszystkie karty.
 //
 // Karta ma stały rozmiar (trzecia geometria z DynamicIsland) i wystawia
 // `hovering`, które wyspa dolicza do controlsHovered — każdy element z własną
@@ -22,10 +27,12 @@ Item {
 
     property int rowHeight: 28
     property int leftColumnWidth: 168
-    property int scanDurationMs: 15000      // skanowanie samo się kończy, żeby nie zjadać radia
 
     implicitWidth: 440
     implicitHeight: 150
+
+    signal openWifi()
+    signal openBluetooth()
 
     // ---------------------------------------------------------------
     // Stan
@@ -33,122 +40,34 @@ Item {
 
     readonly property bool hovering: wifiSwitch.hovering || btSwitch.hovering
         || btnScan.hovering || deviceList.hoveredRows > 0
+        || wifiRow.hovering || btRow.hovering
 
     // ---- Wi-Fi ----
-    readonly property var wifiDevice: {
-        const all = Networking.devices.values;
-        for (let i = 0; i < all.length; i++)
-            if (all[i].type === DeviceType.Wifi) return all[i];
-        return null;
-    }
-
-    readonly property var wifiNetwork: {
-        if (!wifiDevice || !wifiDevice.networks) return null;
-        const nets = wifiDevice.networks.values;
-        for (let i = 0; i < nets.length; i++)
-            if (nets[i].connected) return nets[i];
-        return null;
-    }
+    // Sieci i urządzenie idą z NetworkService — tam jest też cała obsługa
+    // łączenia, wspólna z nakładką.
+    readonly property var wifiNetwork: NetworkService.activeNetwork
 
     readonly property string wifiSubtitle: {
-        if (!Networking.wifiHardwareEnabled) return "Wyłączone sprzętowo";
-        if (!Networking.wifiEnabled) return "Wyłączone";
+        if (!NetworkService.hardwareEnabled) return "Wyłączone sprzętowo";
+        if (!NetworkService.enabled) return "Wyłączone";
+        if (NetworkService.busy) return "Łączę…";
         if (wifiNetwork) return wifiNetwork.name + " · " + Math.round(wifiNetwork.signalStrength * 100) + "%";
         return "Brak połączenia";
     }
 
     // ---- Bluetooth ----
-    readonly property var adapter: Bluetooth.defaultAdapter
-    readonly property bool btOn: adapter !== null && adapter.enabled
-    readonly property bool btBlocked: adapter !== null && adapter.state === BluetoothAdapterState.Blocked
-    readonly property bool btBusy: adapter !== null
-        && (adapter.state === BluetoothAdapterState.Enabling || adapter.state === BluetoothAdapterState.Disabling)
-
-    readonly property int connectedCount: {
-        const all = Bluetooth.devices.values;
-        let n = 0;
-        for (let i = 0; i < all.length; i++) if (all[i].connected) n++;
-        return n;
-    }
+    // Adapter, rfkill i mapowanie ikon mieszkają w BluetoothService, żeby
+    // karta i nakładka pokazywały dokładnie to samo.
+    readonly property bool btOn: BluetoothService.enabled
 
     readonly property string btSubtitle: {
-        if (adapter === null) return "Brak adaptera";
-        if (btBusy) return "Przełączanie…";
+        if (BluetoothService.adapter === null) return "Brak adaptera";
+        if (BluetoothService.busy) return "Przełączanie…";
         if (!btOn) return "Wyłączony";
-        if (adapter.discovering) return "Szukam urządzeń…";
-        if (connectedCount === 0) return "Nic nie połączono";
-        return connectedCount === 1 ? "1 urządzenie" : connectedCount + " urządzenia";
-    }
-
-    // Wyłączony Bluetooth w KDE to blokada rfkill, nie tylko Powered=false.
-    // Zablokowany adapter ignoruje enabled=true (BlueZ zwraca Error.Blocked),
-    // więc włączanie idzie przez rfkill unblock; BlueZ z AutoEnable sam potem
-    // podnosi adapter, a enabled=true po zmianie stanu to zabezpieczenie,
-    // gdyby AutoEnable było wyłączone. Wyłączanie blokuje rfkill, żeby stan
-    // zgadzał się z tym, co pokazuje aplet KDE.
-    property bool pendingEnable: false
-
-    function setBluetooth(on) {
-        if (adapter === null || btBusy) return;
-        if (on) {
-            pendingEnable = true;
-            rfkill.command = ["rfkill", "unblock", "bluetooth"];
-            rfkill.running = true;
-            if (!btBlocked) adapter.enabled = true;
-        } else {
-            pendingEnable = false;
-            adapter.discovering = false;
-            adapter.enabled = false;
-            rfkill.command = ["rfkill", "block", "bluetooth"];
-            rfkill.running = true;
-        }
-    }
-
-    Connections {
-        target: card.adapter
-
-        function onStateChanged() {
-            if (card.pendingEnable && !card.btBlocked && !card.btBusy) {
-                card.pendingEnable = false;
-                if (!card.adapter.enabled) card.adapter.enabled = true;
-            }
-        }
-    }
-
-    Process {
-        id: rfkill
-        onExited: (exitCode, exitStatus) => {
-            if (exitCode !== 0) console.warn("rfkill zakończył się kodem " + exitCode + " — Bluetooth może nie dać się przełączyć.");
-        }
-    }
-
-    function toggleScan() {
-        if (!btOn) return;
-        adapter.discovering = !adapter.discovering;
-        if (adapter.discovering) scanTimer.restart();
-    }
-
-    Timer {
-        id: scanTimer
-        interval: card.scanDurationMs
-        onTriggered: if (card.adapter) card.adapter.discovering = false
-    }
-
-    // Ikony BlueZ (nazwy z freedesktop) -> nasze IslandIcon.
-    function deviceIcon(name) {
-        switch (name) {
-        case "audio-headset":
-        case "audio-headphones": return "headset";
-        case "audio-card":
-        case "audio-speakers": return "speaker";
-        case "phone": return "phone";
-        case "input-keyboard": return "keyboard";
-        case "input-mouse":
-        case "input-tablet": return "mouse";
-        case "input-gaming": return "gamepad";
-        case "computer": return "computer";
-        default: return "bluetooth";
-        }
+        if (BluetoothService.discovering) return "Szukam urządzeń…";
+        const n = BluetoothService.connectedCount;
+        if (n === 0) return "Nic nie połączono";
+        return n === 1 ? "1 urządzenie" : n + " urządzenia";
     }
 
     // ---------------------------------------------------------------
@@ -169,107 +88,166 @@ Item {
             spacing: 10
 
             // Wi-Fi
-            RowLayout {
+            Item {
+                id: wifiRow
+
+                readonly property bool hovering: wifiMouse.containsMouse
+
                 Layout.fillWidth: true
-                spacing: 10
+                Layout.preferredHeight: 40
 
+                // Podświetlenie całego wiersza: mówi, że da się w niego
+                // kliknąć, a nie tylko przestawić przełącznik.
                 Rectangle {
-                    Layout.preferredWidth: 36
-                    Layout.preferredHeight: 36
-                    radius: 11
-                    color: Networking.wifiEnabled ? Qt.rgba(0.22, 0.83, 0.48, 0.16) : "#17171a"
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    radius: 10
+                    antialiasing: true
+                    color: Qt.rgba(1, 1, 1, wifiRow.hovering ? 0.06 : 0)
+                    Behavior on color { ColorAnimation { duration: 140 } }
+                }
 
-                    Behavior on color { ColorAnimation { duration: 200 } }
+                // Pod przełącznikiem, żeby ten dostał swoje kliknięcia.
+                MouseArea {
+                    id: wifiMouse
+                    anchors.fill: parent
+                    anchors.rightMargin: 40
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: card.openWifi()
+                }
 
-                    IslandIcon {
-                        anchors.centerIn: parent
-                        kind: "wifi"
-                        size: 18
-                        color: Networking.wifiEnabled ? "#38d47a" : "#4a4a52"
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 10
+
+                    Rectangle {
+                        Layout.preferredWidth: 36
+                        Layout.preferredHeight: 36
+                        radius: 11
+                        antialiasing: true
+                        color: NetworkService.enabled ? Qt.rgba(0.22, 0.83, 0.48, 0.16) : "#17171a"
+
                         Behavior on color { ColorAnimation { duration: 200 } }
+
+                        IslandIcon {
+                            anchors.centerIn: parent
+                            kind: "wifi"
+                            size: 18
+                            color: NetworkService.enabled ? "#38d47a" : "#4a4a52"
+                            Behavior on color { ColorAnimation { duration: 200 } }
+                        }
                     }
-                }
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 1
-
-                    Text {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        text: "Wi‑Fi"
-                        color: "#f5f5f5"
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
+                        spacing: 1
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Wi‑Fi"
+                            color: "#f5f5f5"
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            text: card.wifiSubtitle
+                            color: "#9a9aa2"
+                            font.pixelSize: 11
+                        }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        text: card.wifiSubtitle
-                        color: "#9a9aa2"
-                        font.pixelSize: 11
+                    IslandSwitch {
+                        id: wifiSwitch
+                        Layout.alignment: Qt.AlignVCenter
+                        checked: NetworkService.enabled
+                        enabled: NetworkService.hardwareEnabled
+                        onToggled: Networking.wifiEnabled = !Networking.wifiEnabled
                     }
-                }
-
-                IslandSwitch {
-                    id: wifiSwitch
-                    Layout.alignment: Qt.AlignVCenter
-                    checked: Networking.wifiEnabled
-                    enabled: Networking.wifiHardwareEnabled
-                    onToggled: Networking.wifiEnabled = !Networking.wifiEnabled
                 }
             }
 
             // Bluetooth
-            RowLayout {
+            Item {
+                id: btRow
+
+                readonly property bool hovering: btMouse.containsMouse
+
                 Layout.fillWidth: true
-                spacing: 10
+                Layout.preferredHeight: 40
 
                 Rectangle {
-                    Layout.preferredWidth: 36
-                    Layout.preferredHeight: 36
-                    radius: 11
-                    color: card.btOn ? Qt.rgba(0.35, 0.55, 1.0, 0.18) : "#17171a"
+                    anchors.fill: parent
+                    anchors.margins: -4
+                    radius: 10
+                    antialiasing: true
+                    color: Qt.rgba(1, 1, 1, btRow.hovering ? 0.06 : 0)
+                    Behavior on color { ColorAnimation { duration: 140 } }
+                }
 
-                    Behavior on color { ColorAnimation { duration: 200 } }
+                MouseArea {
+                    id: btMouse
+                    anchors.fill: parent
+                    anchors.rightMargin: 40
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: card.openBluetooth()
+                }
 
-                    IslandIcon {
-                        anchors.centerIn: parent
-                        kind: "bluetooth"
-                        size: 18
-                        color: card.btOn ? "#5b8cff" : "#4a4a52"
+                RowLayout {
+                    anchors.fill: parent
+                    spacing: 10
+
+                    Rectangle {
+                        Layout.preferredWidth: 36
+                        Layout.preferredHeight: 36
+                        radius: 11
+                        antialiasing: true
+                        color: card.btOn ? Qt.rgba(0.35, 0.55, 1.0, 0.18) : "#17171a"
+
                         Behavior on color { ColorAnimation { duration: 200 } }
+
+                        IslandIcon {
+                            anchors.centerIn: parent
+                            kind: "bluetooth"
+                            size: 18
+                            color: card.btOn ? "#5b8cff" : "#4a4a52"
+                            Behavior on color { ColorAnimation { duration: 200 } }
+                        }
                     }
-                }
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 1
-
-                    Text {
+                    ColumnLayout {
                         Layout.fillWidth: true
-                        text: "Bluetooth"
-                        color: "#f5f5f5"
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
+                        spacing: 1
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: "Bluetooth"
+                            color: "#f5f5f5"
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                        }
+
+                        Text {
+                            Layout.fillWidth: true
+                            elide: Text.ElideRight
+                            text: card.btSubtitle
+                            color: "#9a9aa2"
+                            font.pixelSize: 11
+                        }
                     }
 
-                    Text {
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        text: card.btSubtitle
-                        color: "#9a9aa2"
-                        font.pixelSize: 11
+                    IslandSwitch {
+                        id: btSwitch
+                        Layout.alignment: Qt.AlignVCenter
+                        accent: "#5b8cff"
+                        checked: card.btOn
+                        enabled: BluetoothService.adapter !== null && !BluetoothService.busy
+                        onToggled: BluetoothService.setEnabled(!card.btOn)
                     }
-                }
-
-                IslandSwitch {
-                    id: btSwitch
-                    Layout.alignment: Qt.AlignVCenter
-                    accent: "#5b8cff"
-                    checked: card.btOn
-                    enabled: card.adapter !== null && !card.btBusy
-                    onToggled: card.setBluetooth(!card.btOn)
                 }
             }
 
@@ -295,12 +273,12 @@ Item {
                     font.letterSpacing: 0.4
                 }
 
-                // Skanowanie: ikona kręci się, dopóki adapter szuka.
+                // Dodanie urządzenia = nakładka. Parowanie wymaga miejsca na
+                // PIN i potwierdzenie kodu, więc nie zmieściłoby się tutaj.
                 Item {
                     id: btnScan
 
                     readonly property bool hovering: scanMouse.containsMouse && btnScan.enabled
-                    readonly property bool scanning: card.adapter !== null && card.adapter.discovering
 
                     Layout.preferredWidth: 22
                     Layout.preferredHeight: 22
@@ -316,19 +294,10 @@ Item {
                     }
 
                     IslandIcon {
-                        id: scanIcon
                         anchors.centerIn: parent
-                        kind: "refresh"
+                        kind: "plus"
                         size: 13
-                        color: btnScan.scanning ? "#5b8cff" : "#f2f2f2"
-
-                        RotationAnimation on rotation {
-                            running: btnScan.scanning
-                            loops: Animation.Infinite
-                            from: 0; to: 360
-                            duration: 1100
-                            onRunningChanged: if (!running) scanIcon.rotation = 0
-                        }
+                        color: "#f2f2f2"
                     }
 
                     MouseArea {
@@ -336,7 +305,7 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: card.toggleScan()
+                        onClicked: card.openBluetooth()
                     }
                 }
             }
@@ -375,7 +344,7 @@ Item {
                     Behavior on opacity {
                         NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
                     }
-                    model: Bluetooth.devices
+                    model: BluetoothService.pairedDevices
                     spacing: 0
                     boundsBehavior: Flickable.StopAtBounds
                     flickDeceleration: 4000
@@ -396,9 +365,6 @@ Item {
                         readonly property string devIcon: device ? device.icon : ""
                         readonly property bool devBatteryAvailable: device ? device.batteryAvailable : false
 
-                        // Znalezione urządzenia bez nazwy zgłaszają adres jako
-                        // nazwę — szum, którego nie da się sensownie sparować.
-                        readonly property bool named: device !== null && devName !== "" && devName !== device.address
                         readonly property bool busy: device !== null && (device.pairing
                             || device.state === BluetoothDeviceState.Connecting
                             || device.state === BluetoothDeviceState.Disconnecting)
@@ -408,8 +374,7 @@ Item {
                         }
 
                         width: ListView.view.width
-                        height: named ? card.rowHeight : 0
-                        visible: named
+                        height: card.rowHeight
 
                         onDeviceChanged: rowMouse.syncHover()
 
@@ -429,7 +394,7 @@ Item {
 
                             IslandIcon {
                                 Layout.alignment: Qt.AlignVCenter
-                                kind: card.deviceIcon(row.devIcon)
+                                kind: BluetoothService.deviceIcon(row.devIcon)
                                 size: 14
                                 color: row.devConnected ? "#5b8cff" : (row.devPaired ? "#c8c8cf" : "#6a6a72")
                                 Behavior on color { ColorAnimation { duration: 200 } }
@@ -491,10 +456,7 @@ Item {
 
                             Text {
                                 Layout.alignment: Qt.AlignVCenter
-                                text: row.busy ? "…"
-                                    : row.devConnected ? "połączono"
-                                    : row.devPaired ? ""
-                                    : "sparuj"
+                                text: row.busy ? "…" : (row.devConnected ? "połączono" : "")
                                 color: row.devConnected ? "#5b8cff" : "#6a6a72"
                                 font.pixelSize: 10
                                 visible: text !== ""
@@ -512,7 +474,7 @@ Item {
                             property bool counted: false
 
                             function syncHover() {
-                                const now = containsMouse && row.named;
+                                const now = containsMouse;
                                 if (now === counted) return;
                                 counted = now;
                                 deviceList.hoveredRows += now ? 1 : -1;
@@ -526,8 +488,7 @@ Item {
                             onClicked: {
                                 const d = row.device;
                                 if (d === null) return;
-                                if (!d.paired) d.pair();
-                                else if (d.connected) d.disconnect();
+                                if (d.connected) d.disconnect();
                                 else d.connect();
                             }
                         }
@@ -545,14 +506,15 @@ Item {
                     height: Math.max(8, deviceList.visibleArea.heightRatio * deviceList.height)
                 }
 
-                // Podpowiedź tylko przy NAPRAWDĘ pustej liście. Przy wyłączonym
-                // Bluetoothie sparowane urządzenia dalej są na liście, więc napis
-                // nakładałby się na nie — zamiast tego lista jest przygaszona.
+                // Model zawiera dokładnie to, co widać, więc count nie kłamie.
                 Text {
                     anchors.centerIn: parent
-                    text: card.adapter === null ? "Brak adaptera Bluetooth"
+                    width: parent.width - 12
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: BluetoothService.adapter === null ? "Brak adaptera Bluetooth"
                         : !card.btOn ? "Włącz Bluetooth"
-                        : "Brak urządzeń — kliknij lupę"
+                        : "Nic nie sparowano — kliknij +"
                     color: "#6a6a72"
                     font.pixelSize: 11
                     visible: deviceList.count === 0

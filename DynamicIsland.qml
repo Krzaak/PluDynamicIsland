@@ -2,12 +2,15 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Services.Mpris
+import Quickshell.Wayland
 import Quickshell.Widgets
 
 // Pływająca "wyspa" na górze ekranu: w spoczynku pokazuje tylko zegar,
 // po najechaniu myszką (lub kliknięciu wyspy) rozwija się w karuzelę kart
 // (AirPods | muzyka | Discord | zegar | łączność | powiadomienia) przewijaną
-// kółkiem; karta AirPodsów istnieje tylko wtedy, gdy słuchawki są połączone. Dodatkowo sama się rozwija
+// kółkiem; karta AirPodsów istnieje tylko wtedy, gdy słuchawki są połączone.
+// Karta łączności otwiera nakładki Wi-Fi i Bluetootha, które zastępują całą
+// karuzelę i rozciągają wyspę do własnego rozmiaru. Dodatkowo sama się rozwija
 // na chwilę, gdy zmieni się utwór — tak jak w iOS. Podczas rozmowy na
 // Discordzie obok zwiniętej pigułki stoi druga, mała, z nazwą kanału i timerem.
 PanelWindow {
@@ -48,6 +51,13 @@ PanelWindow {
     property int pillGap: 8             // odstęp pigułek (rozmowa, udostępnianie) od wyspy
     property int pillMaxWidth: 200      // dłuższe nazwy kanałów / aplikacji są obcinane
 
+    // Rozmiar nakładek (Wi-Fi, Bluetooth). Wpisany tutaj, a nie brany
+    // z implicitWidth panelu, bo panele siedzą w Loaderze i przy zamkniętej
+    // nakładce w ogóle nie istnieją — a wysokość OKNA musi być stała, żeby
+    // otwarcie nakładki nie przestawiało rozmiaru powierzchni layer-shella.
+    property int overlayWidth: 620
+    property int overlayHeight: 360
+
     // ---------------------------------------------------------------
     // Okno
     // ---------------------------------------------------------------
@@ -67,14 +77,24 @@ PanelWindow {
     // ale okno liczy się od jej wyższego wariantu — inaczej każde powiadomienie
     // przestawiałoby rozmiar okna layer-shell tam i z powrotem.
     //
-    // Karta AirPodsów wchodzi do rachunku zawsze, także gdy jej nie ma w karuzeli —
-    // z tego samego powodu: połączenie słuchawek nie ma zmieniać rozmiaru okna.
-    readonly property int maxCardHeight: Math.max(...cardHeights, airpods.implicitHeight, notifications.historyHeight)
+    // Karta AirPodsów i nakładki wchodzą do rachunku ZAWSZE, także gdy ich
+    // akurat nie widać — z tego samego powodu: ani połączenie słuchawek, ani
+    // otwarcie formularza nie ma przestawiać rozmiaru okna layer-shella.
+    readonly property int maxCardHeight: Math.max(...cardHeights, airpods.implicitHeight,
+                                                  notifications.historyHeight, overlayHeight)
     property int bottomReserve: 6
     implicitHeight: topMargin + maxCardHeight + bottomReserve + jobBarGap + jobBar.height
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore   // nie rezerwujemy miejsca — wyspa "unosi się" nad oknami
-    focusable: false
+
+    // Klawiatura TYLKO na czas formularza. Exclusive, nie OnDemand: OnDemand
+    // daje klawiaturę dopiero po kliknięciu w powierzchnię, a pole formularza
+    // bierze kursor samo (fPsk.take()) i wtedy nie dostałoby ani znaku.
+    // Poza nakładką None — wyspa nie ma prawa łapać klawiszy, bo przykryłaby
+    // skróty kompozytora.
+    WlrLayershell.keyboardFocus: root.overlayOpen
+        ? WlrKeyboardFocus.Exclusive
+        : WlrKeyboardFocus.None
 
     // Ukrycie skrótem (IpcHandler w shell.qml). Najpierw wygaszamy treść, potem
     // chowamy całe okno: samo przezroczyste okno nadal łapałoby kursor maską
@@ -87,8 +107,10 @@ PanelWindow {
     contentItem.opacity: shownOpacity
     visible: !hiddenByUser || shownOpacity > 0
 
-    // Przypięta wyspa wróciłaby po odkryciu od razu rozwinięta.
-    onHiddenByUserChanged: if (hiddenByUser) pinned = false
+    // Przypięta wyspa wróciłaby po odkryciu od razu rozwinięta, a schowane
+    // okno z klawiaturą Exclusive zjadałoby wszystkie klawisze — stąd i
+    // zamknięcie nakładki.
+    onHiddenByUserChanged: if (hiddenByUser) { pinned = false; overlayMode = ""; }
 
     // Rozmiar DOCELOWY wyspy — bez animacji. Maska wejściowa i obszar reagujący
     // na kursor muszą wyprzedzać animację rozwijania: gdyby szły za animowaną
@@ -133,10 +155,13 @@ PanelWindow {
         || btnMic.hovering || btnDeaf.hovering || btnLeave.hovering
         || outputChip.hovering || outputChipIdle.hovering || micSwitch.hovering
         || connectivity.hovering || notifications.hovering || airpods.hovering
+        || (overlay.item ? overlay.item.hovering : false)
     readonly property bool pointerInside: areaHover.hovered || controlsHovered || pillHover.hovered
 
     onPointerInsideChanged: {
-        if (pointerInside) {
+        // Pod otwartą nakładką karuzeli nie widać, a przestawienie karty
+        // zmieniłoby ją użytkownikowi pod ręką na czas po zamknięciu.
+        if (pointerInside && !root.overlayOpen) {
             // Przy dwóch pigułkach każda otwiera swoją kartę: pigułka rozmowy
             // Discorda, główna muzykę (zegar, gdy nic nie gra). Ustawiamy ją PRZED
             // hovered, żeby wyspa od razu rosła do rozmiaru tej karty, a nie
@@ -152,7 +177,23 @@ PanelWindow {
     }
     property bool pinned: false
     property bool notice: false   // krótkie auto-rozwinięcie, "powiadomienie"
-    readonly property bool expanded: hovered || pinned || notice
+
+    // ---- nakładki (Wi-Fi, Bluetooth) ----
+    // "" | "wifi" | "bluetooth". Nakładka zastępuje pasek kart i rozciąga
+    // wyspę do overlayWidth x overlayHeight. Świadomie NIE jest kartą
+    // karuzeli: karta musiałaby zmieścić się w slocie (slotWidth = 440),
+    // a podniesienie slotu przestawiłoby geometrię wszystkich kart.
+    property string overlayMode: ""
+    readonly property bool overlayOpen: overlayMode !== ""
+
+    function openOverlay(mode) {
+        root.pinned = false;      // nakładka i tak trzyma wyspę rozwiniętą
+        root.overlayMode = mode;
+    }
+
+    function closeOverlay() { root.overlayMode = ""; }
+
+    readonly property bool expanded: hovered || pinned || notice || overlayOpen
 
     // Karta (nazwa, nie indeks), do której wrócić po auto-rozwinięciu;
     // "" = nie wracać (muzyka zostaje na muzyce). Powiadomienie i transfer
@@ -298,8 +339,8 @@ PanelWindow {
     // Wyspa dopasowuje rozmiar do aktywnej karty.
     readonly property int collapsedWidth: 168
     readonly property int collapsedHeight: 34
-    readonly property int expandedWidth: cardWidths[currentCard]
-    readonly property int expandedHeight: cardHeights[currentCard]
+    readonly property int expandedWidth: overlayOpen ? overlayWidth : cardWidths[currentCard]
+    readonly property int expandedHeight: overlayOpen ? overlayHeight : cardHeights[currentCard]
 
     // ---- Discord ----
     readonly property bool inVoice: DiscordService.inVoice
@@ -350,6 +391,7 @@ PanelWindow {
     // wyspa została zostawiona na innej — i już na niej zostaje.
     function showNotice() {
         if (!root.hasPlayer || root.trackTitle === "") return;
+        if (root.overlayOpen) return;
         root.keyBeforeNotice = "";
         root.setCard(root.cardMusic, false);
         root.notice = true;
@@ -360,6 +402,10 @@ PanelWindow {
     // Powiadomienie pulpitu / start transferu: karta powiadomień na chwilę,
     // potem powrót do poprzedniej.
     function showCardNotice(card, duration) {
+        // Nakładka ma pierwszeństwo: wyskakująca karta powiadomień w trakcie
+        // wpisywania hasła zabrałaby wyspę spod ręki. Wpis i tak zostaje
+        // w historii, więc nic nie ginie.
+        if (root.overlayOpen) return;
         if (root.currentCard !== card && root.keyBeforeNotice === "")
             root.keyBeforeNotice = root.currentKey;
         root.setCard(card, false);
@@ -379,6 +425,22 @@ PanelWindow {
 
         function onNotified(entry) { root.showCardNotice(root.cardNotifications, root.notificationDuration); }
         function onJobStarted(job) { root.showCardNotice(root.cardNotifications, root.jobNoticeDuration); }
+    }
+
+    // Parowanie potrafi zacząć URZĄDZENIE (klawiatura, telefon), a nie my.
+    // BlueZ pyta wtedy naszego agenta z otwartym wywołaniem D-Bus i własnym
+    // limitem czasu — bez tego pytanie nie miałoby się gdzie pokazać i po
+    // prostu by wygasło.
+    //
+    // Tylko przy ZAMKNIĘTEJ nakładce: wyrwanie panelu Wi-Fi w trakcie
+    // wpisywania hasła skasowałoby to, co użytkownik już wpisał. Pytanie
+    // odrzuci wtedy limit czasu i wystarczy sparować jeszcze raz.
+    Connections {
+        target: BluetoothService
+
+        function onAskingChanged() {
+            if (BluetoothService.asking && !root.overlayOpen) root.openOverlay("bluetooth");
+        }
     }
 
     // AirPodsy: karta wchodzi do karuzeli i wychodzi z niej razem z połączeniem.
@@ -560,6 +622,9 @@ PanelWindow {
         MouseArea {
             id: mouseArea
             anchors.fill: parent
+            // Nakładka i tak trzyma wyspę rozwiniętą, a klik w tło formularza
+            // przypinałby ją tylko po to, żeby po zamknięciu została otwarta.
+            enabled: !root.overlayOpen
             onClicked: root.pinned = !root.pinned
         }
 
@@ -569,7 +634,8 @@ PanelWindow {
             id: wheel
 
             target: null
-            enabled: root.expanded
+            // Pod nakładką kółko należy do jej list, nie do karuzeli.
+            enabled: root.expanded && !root.overlayOpen
             acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
             property real accum: 0
 
@@ -735,7 +801,7 @@ PanelWindow {
             // zostaje w środku przez cały czas rozciągania.
             x: (island.width - root.slotWidth) / 2 - stripOffset
 
-            opacity: root.expanded ? 1 : 0
+            opacity: (root.expanded && !root.overlayOpen) ? 1 : 0
             visible: opacity > 0.01
 
             Behavior on opacity {
@@ -814,7 +880,9 @@ PanelWindow {
                                 visible: root.trackArtist !== ""
                             }
 
-                            // Wyjście dźwięku: klik przełącza na następny sink.
+                            // Wyjście dźwięku i głośność w jednym: klik w ikonę
+                            // wycisza, klik w resztę przełącza wyjście, kółko
+                            // zmienia głośność.
                             AudioOutputChip {
                                 id: outputChip
                                 Layout.topMargin: 4
@@ -1114,6 +1182,9 @@ PanelWindow {
                     anchors.centerIn: parent
                     width: implicitWidth
                     height: implicitHeight
+
+                    onOpenWifi: root.openOverlay("wifi")
+                    onOpenBluetooth: root.openOverlay("bluetooth")
                 }
             }
 
@@ -1163,6 +1234,48 @@ PanelWindow {
                         ColorAnimation { duration: 200 }
                     }
                 }
+            }
+        }
+
+        // ---- nakładki: Wi-Fi i Bluetooth -------------------------------
+        // Zastępują cały pasek kart. Panel powstaje dopiero przy otwarciu —
+        // skaner Wi-Fi i skanowanie Bluetootha włączają się w jego
+        // Component.onCompleted i mają zgasnąć razem z nim.
+        //
+        // focus na hoście, nie na Loaderze: Escape ma działać także wtedy,
+        // gdy kursor klawiatury siedzi w polu tekstowym. TextInput nie
+        // połyka Escape, więc klawisz idzie w górę drzewa i trafia tutaj.
+        FocusScope {
+            id: overlayHost
+
+            anchors.centerIn: parent
+            width: root.overlayWidth
+            height: root.overlayHeight
+
+            focus: root.overlayOpen
+            opacity: root.overlayOpen ? 1 : 0
+            visible: opacity > 0.01
+            enabled: root.overlayOpen
+
+            Behavior on opacity {
+                NumberAnimation { duration: root.overlayOpen ? 260 : 120; easing.type: Easing.OutCubic }
+            }
+
+            Keys.onEscapePressed: event => {
+                root.closeOverlay();
+                event.accepted = true;
+            }
+
+            Loader {
+                id: overlay
+
+                anchors.fill: parent
+                active: root.overlayOpen
+                source: root.overlayMode === "wifi" ? "WifiPanel.qml"
+                    : root.overlayMode === "bluetooth" ? "BluetoothPanel.qml"
+                    : ""
+
+                onLoaded: item.closed.connect(root.closeOverlay)
             }
         }
     }

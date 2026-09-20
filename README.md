@@ -27,10 +27,19 @@ i `isHidden`:
 qs -p ~/PluDynamicIslandQuickshell ipc call island toggle
 ```
 
-Quickshell ma globalne skróty tylko pod Hyprlandem, więc w KDE skrót ustawia
-się ręcznie: **Ustawienia systemowe → Klawiatura → Skróty → Dodaj nowy →
-Polecenie lub skrypt**, wklej polecenie wyżej (z pełną ścieżką zamiast `~`)
-i przypisz klawisz. Schowana wyspa zdejmuje całe okno, więc nie łapie kursora,
+Na **Hyprlandzie** jest też skrót globalny (`hyprland-global-shortcuts-v1`).
+Protokół nie przypisuje klawisza — robi to konfiguracja kompozytora, a wyspa
+zgłasza tylko nazwę. W `~/.config/hypr/hyprland.conf`:
+
+```
+bind = SUPER, I, global, quickshell:islandToggle
+```
+
+Sprawdzenie, czy skrót się zarejestrował: `hyprctl globalshortcuts`.
+
+Na **KDE** protokołu nie ma, więc skrót ustawia się ręcznie: **Ustawienia
+systemowe → Klawiatura → Skróty → Dodaj nowy → Polecenie lub skrypt**, wklej
+polecenie wyżej (z pełną ścieżką zamiast `~`) i przypisz klawisz. Schowana wyspa zdejmuje całe okno, więc nie łapie kursora,
 a stan przeżywa przeładowanie plików na żywo (`PersistentProperties`).
 Powiadomienia i tak trafiają do historii, tylko nie widać dymka.
 
@@ -160,9 +169,20 @@ wyspa by się zwijała, pigułka wracała pod kursor i tak w kółko.
 | `NotificationService.qml` | Singleton: serwer powiadomień (Quickshell) + mostek transferów KDE, historia. |
 | `NotificationCard.qml` | Karta powiadomień: dymek na całej karcie / trwający transfer nad historią. |
 | `AudioService.qml` | Singleton: sinki PipeWire i przełączanie domyślnego wyjścia. |
-| `AudioOutputChip.qml` | Pigułka z bieżącym wyjściem dźwięku na karcie muzyki. |
+| `AudioOutputChip.qml` | Pigułka na karcie muzyki: bieżące wyjście **i** głośność (wypełnienie + procent). |
 | `kde_jobs_bridge.py` | Serwer `org.kde.JobViewServer` w Pythonie — postęp kopiowania i pobierania z KDE. |
-| `window_activator.py` | Podnosi okno aplikacji przez D-Bus KWina (przycisk „otwórz" w historii). |
+| `window_activator.py` | Podnosi okno aplikacji przez D-Bus KWina — **tylko na KDE**; na Hyprlandzie robi to `ToplevelManager` w QML. |
+| `WifiPanel.qml` | Nakładka Wi‑Fi: lista sieci + formularz (hasło, sieć ukryta, 802.1X). |
+| `BluetoothPanel.qml` | Nakładka Bluetooth: lista urządzeń, parowanie, pytania agenta (PIN, klucz, potwierdzenie). |
+| `NetworkService.qml` | Singleton: sieci Wi‑Fi, skaner, łączenie (znane przez Quickshell, nowe przez `nm_connect.py`). |
+| `BluetoothService.qml` | Singleton: adapter + `rfkill`, mapowanie ikon i agent parowania przez mostek. |
+| `bt_agent_bridge.py` | Agent parowania BlueZ (`org.bluez.Agent1`) — bez niego `pair()` nie ma kogo zapytać o PIN. |
+| `nm_connect.py` | Zakłada i uruchamia połączenie Wi‑Fi przez D-Bus NetworkManagera; sekrety idą **stdin**, nie `argv`. |
+| `IslandTextField.qml` | Pole tekstowe formularza (maskowanie hasła, podgląd okiem, filtr cyfr). |
+| `IslandDropdown.qml` | Lista wyboru (zabezpieczenia, metoda EAP); stanu sama nie zmienia. |
+| `IslandCheckbox.qml` | Pole wyboru z podpisem. |
+| `IslandTextButton.qml` | Przycisk z napisem („Połącz", „Sparuj") z wariantem `busy`. |
+| `HyprlandShortcut.qml` | Skrót globalny Hyprlanda, ładowany Loaderem tylko tam, gdzie protokół istnieje. |
 | `AirPodsService.qml` | Singleton: bateria, czujnik ucha i tryb redukcji hałasu AirPodsów przez mostek. |
 | `AirPodsCard.qml` | Karta AirPodsów: baterie L / P / etui i przełącznik trybu hałasu. |
 | `airpods_bridge.py` | Mostek Python ↔ AirPodsy (protokół AAP po L2CAP), pilnuje połączenia przez D-Bus BlueZ. |
@@ -171,15 +191,16 @@ wyspa by się zwijała, pigułka wracała pod kursor i tak w kółko.
 
 ## Wybór monitora
 
-W `shell.qml`, właściwość `islandScreen` (domyślnie `"DP-1"`).
+W `shell.qml`, właściwość `islandScreen` (domyślnie `""` = wybór automatyczny).
 
 Quickshell nie zna pojęcia „monitora głównego" — Wayland go nie ma — a kolejność
-`Quickshell.screens` **nie** odpowiada priorytetom z KDE (na tej maszynie
-`screens[0]` to HDMI-A-1, czyli ten drugi). Dlatego monitor wskazujemy po nazwie.
-Nazwy wypisze:
+`Quickshell.screens` **nie** odpowiada priorytetom kompozytora (na desktopie z KDE
+`screens[0]` to HDMI-A-1, czyli ten drugi). Dlatego monitor można wskazać po nazwie.
+Nazwy wypiszą:
 
 ```sh
-kscreen-doctor -o
+hyprctl monitors      # Hyprland
+kscreen-doctor -o     # KDE
 ```
 
 Jak podanej nazwy nie ma (monitor odłączony, zmiana nazwy), wyspa spada na ten
@@ -203,10 +224,17 @@ Na górze `DynamicIsland.qml`:
 | `wheelCooldownMs` | `260` | Blokada kolejnego przeskoku po zmianie karty (ms). |
 | `pillGap` | `8` | Odstęp pigułek (rozmowa, udostępnianie) od wyspy (px). |
 | `pillMaxWidth` | `200` | Maksymalna szerokość pigułek; dłuższe nazwy kanałów / aplikacji są obcinane. |
+| `overlayWidth` | `620` | Szerokość nakładek Wi‑Fi / Bluetooth (px). |
+| `overlayHeight` | `360` | Wysokość nakładek (px); wchodzi do wysokości okna zawsze, także przy zamkniętej nakładce. |
 
 Rozmiary wyspy: `collapsedWidth/Height` oraz `cardWidths/cardHeights` per karta
-(`expandedWidth/Height` wynikają z aktywnej karty). `slotWidth` musi być nie
-mniejszy niż największa szerokość karty.
+(`expandedWidth/Height` wynikają z aktywnej karty **albo z otwartej nakładki**).
+`slotWidth` musi być nie mniejszy niż największa szerokość karty — nakładki
+celowo go **nie** dotyczą, bo nie są kartami karuzeli.
+
+Zmierzone przy otwartej nakładce: `expandedWidth/Height` = 620 × 360,
+`reachWidth/Height` = to samo (maska okna zgadza się z kształtem), wysokość
+całego okna = 381 px, `cardStrip.opacity` = 0.
 
 ## Discord
 
@@ -344,6 +372,20 @@ sprawia, że Discord otwiera się na tej rozmowie, a klient poczty na tym mailu.
 Wyspa robi więc dokładnie to samo: `invoke()` na akcji `default`, a zaraz po niej
 podniesienie okna, bo samo `invoke()` nie daje aplikacji fokusu na Wayland.
 
+Podnoszenie okna idzie **dwiema drogami, zależnie od kompozytora**:
+
+- **Hyprland** (i każdy inny z `wlr-foreign-toplevel-management`): wprost z QML,
+  `ToplevelManager` → `Toplevel.activate()`. Zmierzone: lista widzi okna razem
+  z `appId` (`kitty`, `zen`), więc żaden podproces nie jest potrzebny.
+- **KWin**: `ToplevelManager` widzi tam **zero okien** (KWin nie wystawia tego
+  protokołu), więc zostaje `window_activator.py` i D-Bus KWina.
+
+W obu ścieżkach dopasowanie idzie **wyłącznie po `appId`/klasie, nigdy po
+tytule** — przy frazie „discord" wygrałaby karta przeglądarki z Discordem
+w tytule. Porównujemy zbiór wariantów nazwy (pełne id bez `.desktop` i jego
+ostatni człon), bo okno bywa zgłoszone raz jako `org.kde.dolphin`, raz jako
+`dolphin`.
+
 **Dlatego powiadomienia nie są tu wygaszane.** `popupDuration` (5 s) odmierza
 tylko czas, po którym dymek schodzi z karty — samo powiadomienie zostaje otwarte
 tak długo, jak wpis jest w historii. Wcześniej wyspa wołała `expire()`, aplikacja
@@ -454,39 +496,136 @@ magistrali (`dbus-run-session`) i wołaj `requestView` z drugiego procesu.
 
 ## Łączność (Wi‑Fi, Bluetooth)
 
-Czwarta karta. Dane idą z wbudowanych modułów Quickshella: `Quickshell.Networking`
-(NetworkManager) i `Quickshell.Bluetooth` (BlueZ) — bez podprocesów, poza
-`rfkill` do przełączania Bluetootha.
+Czwarta karta jest **podglądem i szybkim przełącznikiem**; wszystko, co wymaga
+wpisywania, dzieje się w nakładkach.
 
-- **Wi‑Fi**: przełącznik oraz nazwa aktualnej sieci z siłą sygnału. Łączenie
-  z sieciami zostaje w KDE. Przy wyłączonym sprzętowo Wi‑Fi przełącznik jest
-  nieaktywny.
-- **Bluetooth**: przełącznik i lista urządzeń — sparowane oraz znalezione przy
-  skanowaniu (ikona lupy w nagłówku listy, skan kończy się sam po
-  `scanDurationMs`). Kliknięcie w sparowane urządzenie łączy lub rozłącza,
-  w niesparowane — paruje (potwierdzenie PIN-u pokazuje agent KDE). Urządzenie,
-  które zgłasza baterię, dostaje ikonę z poziomem i procentami.
-- Kółko nad listą przewija listę, gdy jest co przewijać; gdy lista mieści się
-  w całości, kółko przełącza karty jak zwykle. Żeby przełączyć kartę przy długiej
-  liście, zjedź kursorem na lewą część karty.
+- **Karta**: przełączniki Wi‑Fi i Bluetooth, nazwa aktualnej sieci z siłą sygnału
+  i lista **sparowanych** urządzeń (kliknięcie łączy / rozłącza), z **połączonymi
+  na górze**. Kliknięcie
+  w wiersz Wi‑Fi otwiera nakładkę Wi‑Fi, w wiersz Bluetooth albo w `+` nad listą
+  — nakładkę Bluetootha.
+- **Nakładka** zastępuje całą karuzelę i rozciąga wyspę do 620 × 360 px. Nie jest
+  kartą: karta musiałaby zmieścić się w slocie (`slotWidth` = 440), a podniesienie
+  slotu przestawiłoby geometrię wszystkich pozostałych kart. Zamyka ją `Escape`,
+  strzałka w lewo albo zjechanie kursorem.
 
-Ustawienia na górze `ConnectivityCard.qml`:
+### Nakładka Wi‑Fi
 
-| Właściwość | Domyślnie | Znaczenie |
-| --- | --- | --- |
-| `rowHeight` | `28` | Wysokość wiersza listy urządzeń (px). |
-| `leftColumnWidth` | `168` | Szerokość kolumny z przełącznikami (px). |
-| `scanDurationMs` | `15000` | Po tylu ms skanowanie samo się kończy. |
+Po lewej lista sieci (siła sygnału słupkami, kłódka, „zapisana"), po prawej
+formularz. Pola zależą od tego, co wybrano:
+
+| Sytuacja | Pola |
+| --- | --- |
+| sieć zapisana | brak — hasło już jest, zostaje „Połącz" / „Rozłącz" / „Zapomnij" |
+| WPA/WPA2/WPA3 | hasło (z podglądem), „łącz automatycznie" |
+| WEP | klucz, „łącz automatycznie" |
+| otwarta / OWE | sama zgoda |
+| **sieć ukryta** | nazwa (SSID), wybór zabezpieczeń, dalej jak wyżej |
+| **802.1X** | metoda EAP, tożsamość, tożsamość anonimowa, hasło, uwierzytelnianie wewnętrzne, certyfikat CA |
+
+Skaner (`WifiDevice.scannerEnabled`) chodzi **tylko przy otwartej nakładce** —
+ciągłe skanowanie przerywa transmisję na karcie. Zmierzone: bez skanera widać
+1 sieć (tę połączoną), ze skanerem 15.
+
+Dlaczego część połączeń idzie przez `nm_connect.py`, a nie przez Quickshell:
+`WifiNetwork` daje tylko `connectWithPsk(psk)` dla sieci **widocznej**, a
+`connectWithSettings()` chce obiektu `NMSettings`, którego **nie da się utworzyć
+z QML** (typ nie jest eksportowany — sprawdzone w `qmltypes`). Sieć ukryta,
+802.1X i wybór „łącz automatycznie" muszą więc iść po D-Bus do NetworkManagera.
+Podział: sieć **znana** → `network.connect()` (nie zakłada drugiego profilu),
+sieć **nowa** → `nm_connect.py`.
+
+Sekrety idą do pomocnika **JSON-em na stdin**, nie w `argv`: `/proc/<pid>/cmdline`
+czyta na Linuksie każdy proces tego samego użytkownika, a tam byłoby hasło.
+
+### Nakładka Bluetooth i parowanie
+
+Po lewej lista urządzeń — **połączone na górze**, potem sparowane, potem
+znalezione przy skanowaniu (w grupach alfabetycznie, żeby wiersze nie
+przestawiały się same przy każdej zmianie sygnału). Po prawej albo szczegóły
+wybranego urządzenia, albo pytanie agenta.
+
+Urządzenia bez prawdziwej nazwy są odsiewane. BlueZ wstawia im w nazwę własny
+adres, ale z **myślnikami** (`07-2A-34-13-BE-04`), podczas gdy `address` ma
+dwukropki — przez co porównanie „nazwa to adres" długo nie trafiało i lista
+puchła od surowych adresów. Zmierzone przy jednym skanowaniu: 24 urządzenia
+z BlueZ, 6 z prawdziwą nazwą. Pola urządzenia: nazwa
+(alias BlueZ, zatwierdza `Enter`), „zaufane", „zablokowane", „może wybudzać
+komputer", bateria; akcje: „Sparuj" / „Połącz" / „Rozłącz" / „Zapomnij".
+Pod listą przełącznik „widoczny dla innych" (`adapter.discoverable`).
+
+**Bez własnego agenta parowanie nie działa w ogóle.** `Quickshell.Bluetooth` daje
+`device.pair()`, ale nie daje agenta — a bez agenta BlueZ nie ma kogo zapytać
+o PIN i parowanie kończy się natychmiastowym `org.bluez.Error.AuthenticationCanceled`.
+Normalnie agenta trzyma aplet pulpitu (bluedevil w KDE, blueman w GNOME);
+na Hyprlandzie nie ma żadnego — zmierzone przez `AgentManager1`, gdzie nic nie
+było zarejestrowane. Dlatego wyspa wystawia własnego (`bt_agent_bridge.py`,
+zdolność `KeyboardDisplay`).
+
+Pytania, które agent obsługuje:
+
+| `kind` | Co widać |
+| --- | --- |
+| `pin` | pole na kod (1–16 znaków) |
+| `passkey` | pole na sześć cyfr |
+| `confirm` | sześć cyfr do porównania z ekranem urządzenia, „Zgadza się" / „Odrzuć" |
+| `authorize` | zgoda bez kodu („just works") |
+| `service` | zgoda na usługę, z UUID-em |
+| `display-pin`, `display-passkey` | kod **do przepisania na urządzeniu**, bez odpowiedzi |
+
+Pytanie potrafi przyjść, gdy parowanie zaczyna **urządzenie** (klawiatura,
+telefon), a nie my — wtedy wyspa sama otwiera nakładkę Bluetootha, ale tylko przy
+zamkniętej nakładce: wyrwanie panelu Wi‑Fi w trakcie wpisywania hasła skasowałoby
+to, co użytkownik już wpisał.
+
+Zamknięcie nakładki w trakcie pytania jest **odmową**, nie zniknięciem — inaczej
+po stronie BlueZ zostałoby wiszące wywołanie D-Bus aż do jego limitu czasu.
+
+Zmierzone (prywatna magistrala, agent wołany jak przez BlueZ): `RequestPinCode`
+zwraca wpisany kod, `RequestPasskey` liczbę, `RequestConfirmation` /
+`AuthorizeService` pustą odpowiedź, odmowa → `org.bluez.Error.Rejected`,
+a niecyfrowy klucz też → `Rejected` zamiast wyjątku. Wywołań `Agent1` **nie da
+się zasymulować na magistrali systemowej** — polityka przepuszcza tam tylko
+`bluetoothd` (dostaje się „Access denied").
+
+Ustawienia:
+
+| Plik | Właściwość | Domyślnie | Znaczenie |
+| --- | --- | --- | --- |
+| `ConnectivityCard.qml` | `rowHeight` | `28` | Wysokość wiersza listy urządzeń (px). |
+| `ConnectivityCard.qml` | `leftColumnWidth` | `168` | Szerokość kolumny z przełącznikami (px). |
+| `BluetoothPanel.qml` | `scanDurationMs` | `30000` | Po tylu ms skanowanie samo się kończy. |
+| `BluetoothPanel.qml` | `listWidth` | `264` | Szerokość listy urządzeń w nakładce (px). |
+| `WifiPanel.qml` | `listWidth` | `264` | Szerokość listy sieci w nakładce (px). |
+| `NetworkService.qml` | `connectTimeoutMs` | `25000` | Po tylu ms przestajemy pokazywać „łączę". |
+| `BluetoothService.qml` | `restartDelayMs` | `3000` | Odczekanie przed restartem mostka agenta. |
+| `bt_agent_bridge.py` | `REPLY_TIMEOUT_MS` | `120000` | Siatka bezpieczeństwa, gdyby wyspa zniknęła w trakcie pytania. |
 
 Dlaczego przełącznik Bluetootha idzie przez `rfkill`: wyłączony Bluetooth w KDE
 to blokada rfkill, a zablokowany adapter ignoruje `enabled = true` (BlueZ zwraca
 `Error.Blocked`). Włączanie robi `rfkill unblock bluetooth` (bez roota), po czym
 BlueZ z `AutoEnable` sam podnosi adapter; wyłączanie ustawia `enabled = false`
-i blokuje rfkill, żeby aplet KDE pokazywał to samo, co wyspa.
+i blokuje rfkill, żeby aplet KDE pokazywał to samo, co wyspa. Cała ta ścieżka
+mieszka w `BluetoothService`, żeby karta i nakładka nie miały dwóch kopii.
 
 Zmierzone: moduły Quickshella ładują dane asynchronicznie — adapter pojawia się
 1–6 s po starcie, a tuż po pojawieniu zgłasza przejściowo stan `Enabling`
 (karta pokazuje wtedy „Przełączanie…" i blokuje przełącznik na ułamek sekundy).
+
+### Klawiatura
+
+Formularze wymagają klawiatury, a layer-shell dostaje ją tylko wtedy, gdy o nią
+poprosi. Wyspa bierze ją **wyłącznie na czas nakładki**
+(`WlrLayershell.keyboardFocus`):
+
+- nakładka otwarta → `Exclusive`,
+- poza nakładką → `None`.
+
+`Exclusive`, a nie `OnDemand`, bo `OnDemand` daje klawiaturę dopiero po
+kliknięciu w powierzchnię — a pole formularza bierze kursor samo
+(`fPsk.take()`) i wtedy nie dostałoby ani znaku. `None` poza nakładką, żeby
+wyspa nie przykrywała skrótów kompozytora. Ukrycie wyspy skrótem zamyka nakładkę
+z tego samego powodu: schowane okno z `Exclusive` zjadałoby wszystkie klawisze.
 
 ## AirPodsy
 
@@ -599,6 +738,39 @@ Zmierzone na muzyce (punkty zmiany na sekundę, zakres 0–100):
 
 Poniżej ~15 skok między klatkami przekracza 4 punkty i pięć 2-pikselowych
 słupków zaczyna migotać.
+
+## Głośność
+
+Głośność siedzi w pigułce wyjścia na karcie muzyki — tej samej, która pokazuje,
+dokąd leci dźwięk. Pigułka robi podwójną robotę:
+
+- **tło wypełnia się** do poziomu głośności, a obok nazwy stoi procent
+  („`ALC3266 Analog · 45%`"),
+- **kółko** nad pigułką zmienia o `volumeStep` (domyślnie 3%) i jest połykane,
+  więc nie przełącza karty jak kółko w innych miejscach wyspy,
+- **klik w ikonę** (lewe 22 px) wycisza i odcisza — wyciszone poznasz po
+  czerwonej przekreślonej ikonie i przygaszonym procencie,
+- **klik w resztę** pigułki dalej przełącza wyjście, jak przedtem,
+- podgłośnienie wyciszonego wyjścia samo je odcisza — inaczej procent rośnie,
+  a z głośników dalej nic nie leci.
+
+Skala to 0–1 liniowo, ta sama co w `wpctl get-volume` (zmierzone: 0,75 po obu
+stronach). Głośność dotyczy **wyjścia**, nie odtwarzacza — działa też wtedy,
+gdy nic nie gra (pigułka jest wtedy na karcie „Nic nie gra").
+
+Obrót kółka jest **sumowany** do pełnego ząbka (`volumeWheelDelta`, 120 jednostek
+`angleDelta`), a nie stosowany od razu — tak samo jak przy przewijaniu kart.
+Bez tego touchpad, który przysyła drobne porcje po kilka-kilkanaście jednostek,
+zmieniał głośność o cały krok na KAŻDE zdarzenie: zmierzone, jedno machnięcie
+palcem (12 zdarzeń po 10 jednostek) dawało **+60%** zamiast +3%. Stąd wrażenie,
+że w nic nie da się trafić. Wynik jest też zaokrąglany do pełnego procentu, żeby
+ten sam ruch dwa razy dawał ten sam wynik.
+
+Dlaczego nie osobny suwak: pierwsza wersja miała własny wiersz z suwakiem
+i podniosła kartę muzyki ze 118 na 140 px, co było zauważalnie za dużo.
+Zmierzone: kolumna tytułu ma **202 px**, sama pigułka zajmuje 119 px, więc na
+suwak obok zostawało tylko ~75 px — za ciasno na wygodne chwytanie. Pigułka
+z wypełnieniem mieści się w 151 px i **nie kosztuje ani piksela wysokości**.
 
 ## Uwaga o MPRIS
 

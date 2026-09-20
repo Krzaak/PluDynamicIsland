@@ -8,11 +8,14 @@ Dynamiczna wyspa w stylu iOS dla **Quickshell** (Wayland, layer-shell). Czysty Q
 brak kroku budowania, brak testów, brak zależności poza tymi z systemu.
 
 Cel: pływająca pigułka na górze ekranu, która w spoczynku pokazuje zegar, okładkę
-i spektrum dźwięku, a po najechaniu rozwija się w karuzelę kart (muzyka | Discord |
-zegar | łączność) przewijaną kółkiem. Podczas rozmowy na Discordzie obok zwiniętej pigułki
+i spektrum dźwięku, a po najechaniu rozwija się w karuzelę kart (AirPodsy | muzyka |
+Discord | zegar | łączność | powiadomienia) przewijaną kółkiem. Karta łączności
+otwiera nakładki Wi-Fi i Bluetootha, które zastępują karuzelę i rozciągają wyspę
+do 620 × 360 px. Podczas rozmowy na Discordzie obok zwiniętej pigułki
 stoi druga, mała, z nazwą kanału i timerem.
 
-Środowisko docelowe: Quickshell 0.3.1, Qt 6.11, KDE/KWin na Wayland.
+Środowisko docelowe: Quickshell 0.3.1, Qt 6.11, Wayland. Działa na **Hyprlandzie**
+(tu: 0.56.2) i na KDE/KWin — różnice są wypunktowane niżej, w "Dwa kompozytory".
 
 ## Polecenia
 
@@ -21,7 +24,9 @@ qs -p .                                        # uruchomienie z katalogu projekt
 qs -p . --no-color --log-times > IslandLogs.log 2>&1   # z logiem do pliku
 timeout 8 qs -p . --no-color > IslandLogs.log 2>&1     # przebieg kontrolny
 grep -acE "WARN|ERROR|error:" IslandLogs.log   # 2 = czysto (patrz niżej)
-kscreen-doctor -o                              # nazwy monitorów (dla islandScreen)
+hyprctl monitors                               # nazwy monitorów (Hyprland)
+kscreen-doctor -o                              # nazwy monitorów (KDE)
+hyprctl globalshortcuts                        # czy skrót wyspy się zarejestrował
 ```
 
 Kod wyjścia `124` z `timeout` oznacza sukces — proces dożył do końca limitu.
@@ -50,6 +55,14 @@ i pomyli pomiar (dwie instancje widzą nawzajem swoje skutki). Sondy, które zmi
 stan systemu, uruchamiaj z **kopii** projektu w katalogu roboczym sesji, nie z tego
 katalogu. Sondy czysto odczytowe mogą zostać w projekcie, ale i tak kasuj je od razu.
 
+**Wyglądu nie oceniaj na ślepo.** `grim`, `slurp` ani `wayshot` nie są tu
+zainstalowane, ale Qt potrafi zrobić zrzut samo: `item.grabToImage(r =>
+r.saveToFile("/tmp/x.png"), Qt.size(w, h))` w sondzie zapisuje PNG, który da się
+obejrzeć. To jedyny sposób, żeby zobaczyć układ, zanim zobaczy go użytkownik.
+Uwaga: zrzut zrobiony w tym samym tiku co zmiana stanu łapie animacje `Behavior`
+**przed** startem (podświetlenie wygląda wtedy na nieistniejące) — daj timerowi
+kilkaset ms.
+
 Czego **nie da się** tu sprawdzić: ruchu kursora. Brak `ydotool`/`dotool`, użytkownik
 nie jest w grupie `input`, a Wayland z założenia nie pozwala klientom przesuwać
 wskaźnika. Hover, najechanie i klikanie musi potwierdzić użytkownik — geometrię
@@ -70,6 +83,28 @@ serii przebiegów kontrolnych to normalne, ale warto uprzedzić.
 jedna instancja `DynamicIsland` (`PanelWindow`). Singletony w katalogu konfiguracji
 Quickshell rejestrują się same — **nie dodawaj `qmldir`**, zepsuje to niejawny
 import pozostałych komponentów.
+
+### Dwa kompozytory
+
+Wyspa chodzi na Hyprlandzie i na KWinie. Miejsca, w których to widać:
+
+- **Monitor.** `islandScreen` w `shell.qml`; puste = automat (ekran w punkcie
+  `(0,0)`, potem pierwszy z listy). Nie wpisuj tu nazwy na stałe — to psuje
+  projekt na drugiej maszynie.
+- **Skrót globalny.** `hyprland-global-shortcuts-v1` ma tylko Hyprland, więc
+  `GlobalShortcut` siedzi w osobnym pliku (`HyprlandShortcut.qml`) ładowanym
+  `Loaderem` po `Quickshell.env("HYPRLAND_INSTANCE_SIGNATURE")`. Import
+  `Quickshell.Hyprland` w pliku ładowanym zawsze dawałby ostrzeżenie na KDE.
+  Na KDE zostaje IPC (`qs -p . ipc call island toggle`).
+- **Podnoszenie okien.** Hyprland wystawia `wlr-foreign-toplevel-management`
+  i `ToplevelManager` widzi tam okna z `appId` (zmierzone: `kitty`, `zen`) —
+  robi to więc QML (`NotificationService.raiseToplevel`). KWin tego protokołu
+  nie ma i lista jest pusta, więc tam wchodzi `window_activator.py`. Dopasowanie
+  w OBU ścieżkach idzie tylko po `appId`/klasie, nigdy po tytule.
+- **Agent BlueZ.** Na KDE trzyma go bluedevil, na Hyprlandzie **nie ma go
+  wcale** — bez własnego agenta `pair()` pada od razu. Patrz BluetoothService.
+- **Demon powiadomień.** Brama na `NameHasOwner` działa tak samo; na Hyprlandzie
+  nazwa `org.freedesktop.Notifications` jest zwykle wolna od startu.
 
 ### Trzy niezależne geometrie
 
@@ -152,6 +187,129 @@ musi licznik zmniejszyć (`Component.onDestruction`), inaczej wyspa nigdy się n
 
 Objaw pomyłki w tym miejscu jest mylący: **kliknięcia działają, hover nie** — goły
 `Item` nie przyjmuje klawiszy myszy, więc naciśnięcia przelatują niżej, a hover nie.
+
+### Nakładki (Wi-Fi, Bluetooth) i klawiatura
+
+`overlayMode` (`""` | `"wifi"` | `"bluetooth"`) przełącza wyspę w tryb nakładki:
+pasek kart gaśnie, a `expandedWidth/Height` idą na `overlayWidth × overlayHeight`
+(620 × 360). Panel żyje w `Loaderze`, więc powstaje dopiero przy otwarciu.
+
+**Nakładka NIE jest kartą karuzeli i nie może nią zostać.** Karta musi zmieścić
+się w slocie (`slotWidth` = 440), a podniesienie slotu przeliczyłoby geometrię
+wszystkich pozostałych kart. Dlatego `overlayHeight` wchodzi do `maxCardHeight`
+(wysokość okna ma być stała), ale `slotWidth` zostaje nietknięty.
+
+Rzeczy, które trzeba wyłączyć na czas nakładki, bo inaczej gryzą się z formularzem:
+`WheelHandler` wyspy (kółko należy wtedy do list panelu), `MouseArea` przypinająca
+wyspę, przestawianie karty w `onPointerInsideChanged` oraz `showNotice` /
+`showCardNotice` — wyskakująca karta powiadomień w trakcie wpisywania hasła
+zabrałaby wyspę spod ręki.
+
+**Klawiatura.** `WlrLayershell.keyboardFocus`: `Exclusive` przy otwartej nakładce,
+`None` poza nią. `OnDemand` **nie wystarcza** — daje klawiaturę dopiero po
+kliknięciu w powierzchnię, a pole formularza bierze kursor samo (`fPsk.take()`)
+i wtedy nie dostałoby ani znaku. Ukrycie wyspy (`hiddenByUser`) musi zamykać
+nakładkę: schowane okno z `Exclusive` zjadałoby wszystkie klawisze.
+
+`Escape` obsługuje `FocusScope` (`overlayHost`), nie Loader — `TextInput` nie
+połyka `Escape`, więc klawisz idzie w górę drzewa i trafia tam nawet wtedy, gdy
+kursor klawiatury siedzi w polu.
+
+**Pole tekstowe jest źródłem prawdy dla swojej zawartości.** `text: panel.cośTam`
+plus `onTextChanged: panel.cośTam = text` wygląda niewinnie, ale `TextInput`
+zmienia swój tekst sam i pierwszy wpisany znak **zrywa powiązanie** — od tej
+chwili wyzerowanie właściwości nie czyści już pola. Formularze czytają więc
+`fPsk.text` wprost, a `resetFields()` przypisuje do pól. Listy wyboru i checkboxy
+mogą trzymać stan na zewnątrz, bo (jak `IslandSwitch`) swojego nie ruszają —
+`IslandDropdown` celowo **nie** ustawia sobie `value`, tylko zgłasza `picked`.
+
+**Rozwinięta lista wyboru musi wyjść poza formularz.** `z: 100` nie wystarcza
+z dwóch niezależnych powodów (oba zmierzone na formularzu 802.1X): `z` działa
+tylko między rodzeństwem, więc pola deklarowane po liście i tak rysowały się na
+niej, a przewijany formularz ma `clip: true`, którego `z` nie omija — lista
+wychodziła przycięta i przezroczysta. Dlatego `IslandDropdown` przyjmuje
+`menuParent` (warstwa `menuLayer` na końcu `WifiPanel.qml`, poza `Flickable`),
+a pozycję liczy `mapToItem` w chwili otwarcia, z odbiciem do góry, gdy pod
+spodem brakuje miejsca. `mapToItem` **nie jest powiązaniem**, więc przewinięcie
+formularza zamyka listę (`onContentYChanged`) zamiast zostawiać ją w powietrzu.
+
+Przyciski akcji siedzą **poza** `Flickable` formularza, przypięte do dołu:
+formularz 802.1X ma osiem pól i jest wyższy niż nakładka (~548 px przy 360 px
+miejsca), więc w środku przewijanego obszaru „Połącz" wypadałby pod krawędź.
+
+### BluetoothService (adapter + agent parowania)
+
+Singleton nad `bt_agent_bridge.py`, ale trzyma też adapter, `rfkill` i mapowanie
+ikon BlueZ — karta łączności i nakładka mają pokazywać dokładnie to samo, a
+wcześniej obie miały własną kopię tej logiki.
+
+- **Bez agenta parowanie nie działa.** Quickshell daje `device.pair()`, ale nie
+  daje agenta; BlueZ nie ma wtedy kogo zapytać o PIN i zwraca od razu
+  `AuthenticationCanceled`. Zdolność `KeyboardDisplay` (najszersza) — węższa
+  kazałaby BlueZ-owi parować „just works" i cicho obniżała bezpieczeństwo.
+- Metody agenta są **asynchroniczne** (`async_callbacks`): wywołanie D-Bus
+  zostaje otwarte, a odpowiedź idzie dopiero po kliknięciu w wyspie. Inaczej
+  metoda musiałaby zwrócić wartość od razu, czyli zgadywać za użytkownika.
+- Rejestracja żyje w procesie `bluetoothd` — po jego restarcie (`Release()`,
+  `NameOwnerChanged`) trzeba zarejestrować się **od nowa**, inaczej parowanie
+  cicho przestaje działać aż do restartu wyspy.
+- `display-pin` / `display-passkey` mają `id: 0` i **nie czekają na odpowiedź** —
+  kod przepisuje się na urządzeniu.
+- Zamknięcie panelu w trakcie pytania musi być **odmową** (`dismiss()`), nie
+  zniknięciem: inaczej po stronie BlueZ wisi otwarte wywołanie do jego timeoutu.
+- Pytanie potrafi przyjść, gdy parowanie zaczyna urządzenie — wyspa otwiera
+  wtedy nakładkę sama, ale tylko gdy żadna nie jest otwarta (wyrwanie panelu
+  Wi-Fi skasowałoby wpisywane hasło).
+- **Testu nie da się zrobić na magistrali systemowej**: polityka przepuszcza
+  wywołania `Agent1` tylko od `bluetoothd` (dostajesz „Access denied"). Agenta
+  sprawdza się na `dbus-run-session`, na KOPII skryptu z `SystemBus` podmienioną
+  na `SessionBus` — pamiętaj wtedy zaślepić `device_info`, bo `GetAll` na
+  nieistniejącym `org.bluez` blokuje pętlę agenta aż do timeoutu.
+
+### Kolejność i nazwy urządzeń Bluetooth
+
+`BluetoothService.sortedDevices` to jedyna lista, z której korzystają karta
+i nakładka: **połączone na górze**, potem sparowane, potem reszta, w grupach
+alfabetycznie (sortowanie po samym sygnale przestawiałoby wiersze pod kursorem).
+`pairedDevices` to jej podzbiór dla karty.
+
+**Bezimiennym urządzeniom BlueZ wstawia w nazwę ich własny adres, ale
+z MYŚLNIKAMI** (`07-2A-34-13-BE-04`), podczas gdy `device.address` ma
+dwukropki. Dlatego pierwotne `name !== address` **nigdy nie trafiało** —
+objawiało się listą pełną surowych adresów. Zmierzone przy skanowaniu:
+24 urządzenia z BlueZ, z czego tylko 6 miało prawdziwą nazwę; resztę
+odsiewa `hasRealName()`, który normalizuje separatory i zna jeszcze jeden
+zastępnik, dosłowne `LE_UNKNOWN`.
+
+Filtrowanie siedzi w **modelu**, nie w delegacie: delegat o zerowej wysokości
+dalej liczy się do `count`, więc podpowiedź „Szukam urządzeń…" nie pokazałaby
+się przy liście złożonej z samych zastępników.
+
+### NetworkService (Wi-Fi) i nm_connect.py
+
+`Quickshell.Networking` umie mało: `connectWithPsk(psk)` dla sieci **widocznej**,
+i tyle. `connectWithSettings()` chce `NMSettings`, którego **nie da się utworzyć
+z QML** — typ nie jest eksportowany (sprawdzone w `qmltypes`). Sieć ukryta,
+802.1X i „łącz automatycznie" muszą więc iść po D-Bus do NetworkManagera.
+
+- Podział: sieć **znana** → `network.connect()` (nie zakłada drugiego profilu
+  obok istniejącego), sieć **nowa** → `nm_connect.py` z pełnym formularzem.
+- **Sekrety idą stdin-em, nie w argv.** `/proc/<pid>/cmdline` czyta każdy proces
+  tego samego użytkownika — `nmcli ... password X` wystawiłby hasło. Pomocnik
+  czyta JSON do EOF, więc po `write()` trzeba ustawić `stdinEnabled = false`,
+  a po wyjściu procesu przywrócić na `true` (Process jest jeden na wszystkie
+  próby i zamknięte stdin zostałoby zamknięte na zawsze).
+- `ssid` musi być **tablicą bajtów** (`dbus.ByteArray`), nie stringiem — sieci
+  nie zawsze są poprawnym UTF-8, a NM odrzuci zły typ.
+- `ok: true` z pomocnika znaczy tylko, że NM **przyjął** zlecenie. Czy hasło było
+  dobre, widać dopiero po stanie sieci (`connectionFailed`, `connected`).
+- `pendingNetwork` jest **wyprowadzone** z `busySsid`, nie przypisywane: przy
+  sieci ukrytej obiekt sieci jeszcze nie istnieje w chwili zlecenia i ręczne
+  przypisanie zostawiłoby `null` na zawsze — czyli żadnego „złe hasło", tylko
+  timeout.
+- `scannerEnabled` włączamy **tylko przy otwartym panelu** — ciągłe skanowanie
+  przerywa transmisję na karcie. Zmierzone: bez skanera widać 1 sieć (połączoną),
+  ze skanerem 15.
 
 ### Wybór odtwarzacza MPRIS
 
@@ -323,6 +481,31 @@ bindowania węzła (`PwObjectTracker`), `audio` (głośność) już nie. Pigułk
 `AudioOutputChip` na karcie muzyki jest w dwóch wariantach karty (z odtwarzaczem
 i bez), oba wliczone do `controlsHovered`.
 
+Głośność (`audio.volume`, `audio.muted`) wymaga związania węzła
+`PwObjectTracker`-em tak samo jak mikrofon — bez tego `audio` jest `null`.
+Wiązane jest **tylko bieżące wyjście**, nie wszystkie sinki. Skala to 0–1
+liniowo, ta sama co w `wpctl get-volume` (zmierzone: 0,75 po obu stronach) —
+nie procenty i nie krzywa sześcienna.
+
+Sterowanie siedzi w `AudioOutputChip`, a nie w osobnym suwaku. Pierwsza wersja
+miała własny wiersz i podniosła kartę muzyki ze 118 na 140 px — za dużo.
+Zmierzone: kolumna tytułu ma 202 px, a sama pigułka 119, więc na suwak obok
+zostawało ~75 px (za ciasno); pigułka z wypełnieniem mieści się w 151 px
+i nie kosztuje wysokości. Klik w lewe 22 px wycisza, klik w resztę przełącza
+wyjście (MouseArea ikony jest deklarowana PÓŹNIEJ, więc leży na tej większej).
+Kółko zmienia głośność i jest **połykane**, żeby nie przeleciało do wyspy jako
+zmiana karty.
+
+Obrót kółka trzeba **sumować** do pełnego ząbka (`volumeWheelDelta` = 120),
+dokładnie jak przy przewijaniu kart. Pierwsza wersja stosowała cały krok na
+KAŻDE zdarzenie i na touchpadzie (tu: `syna2393`) jedno machnięcie palcem —
+12 zdarzeń po ~10 jednostek — dawało **+60% zamiast +3%** (zmierzone). Wynik
+`stepVolume` jest zaokrąglany do pełnego procentu, inaczej kółko zostawia
+wartości w rodzaju 0,4733 i ten sam ruch dwa razy daje inny wynik.
+
+Pigułka to `ClippingRectangle`, nie `Rectangle`: `clip: true` na `Rectangle`
+z `radius` przycina PROSTOKĄTNIE i wypełnienie wystawałoby poza zaokrąglone rogi.
+
 Mikrofon systemowy (przełącznik `micSwitch` na karcie Discorda) wycisza **wszystkie**
 źródła `AudioSource`, nie tylko domyślne — aplikacja może słuchać innego wejścia
 (tu kamera jest domyślna, a wbudowane ALC1220 też żyje). `micOn` = którekolwiek
@@ -330,6 +513,13 @@ nie jest wyciszone, więc OFF gwarantuje ciszę. `muted` wymaga związania węz�
 (`PwObjectTracker` na `sources`).
 
 ### Karta łączności (Wi-Fi, Bluetooth)
+
+Karta jest **podglądem i szybkim przełącznikiem**; wszystko, co wymaga wpisywania
+(hasło do nowej sieci, PIN przy parowaniu), dzieje się w nakładkach, które karta
+otwiera sygnałami `openWifi` / `openBluetooth`. Lista na karcie pokazuje tylko
+urządzenia **sparowane** — nowe, znalezione przy skanowaniu, są w nakładce razem
+z przyciskiem parowania. Adapter, `rfkill` i mapowanie ikon są w `BluetoothService`,
+a nie w karcie: wcześniej karta i nakładka miały dwie kopie tej samej logiki.
 
 `Quickshell.Networking` i `Quickshell.Bluetooth` ładują dane **asynchronicznie**:
 przez ~1–6 s po starcie `Networking.devices` jest puste, `Bluetooth.defaultAdapter`
@@ -349,13 +539,24 @@ w karcie musi znosić `null` i chwilowy stan "busy".
 - `device.battery` traktuj jako 0–1 z gardą na 0–100 — dokumentacja Quickshella tego
   nie precyzuje, a żadne sparowane tu urządzenie nie zgłasza baterii, więc nie było
   jak zmierzyć.
+- `modelData` delegatu to tutaj **ten sam obiekt** co element modelu (zmierzone:
+  `modelData === networks[0]` daje `true`), więc zaznaczenie wiersza można trzymać
+  przez porównanie tożsamości. To NIE jest sprzeczne z pułapką z historii powiadomień
+  — tam model był tablicą zwykłych obiektów JS i delegat dostawał kopię; tu elementy
+  są QObject-ami i przechodzą jako wskaźniki.
+- Wybrane urządzenie potrafi zniknąć z BlueZ (znalezione przy skanowaniu przepada
+  kilka sekund po jego końcu). Panel pilnuje tego przez `Connections` na
+  `Bluetooth.devices` i czyści wybór, inaczej formularz pokazywałby dane
+  urządzenia, którego już nie ma.
 
 ### Wybór monitora
 
 Quickshell nie zna pojęcia „monitora głównego" (Wayland go nie ma), a kolejność
-`Quickshell.screens` **nie** odpowiada priorytetom KDE — na tej maszynie `screens[0]`
-to drugi monitor. Monitor wskazuje się po nazwie w `shell.qml` (`islandScreen`),
-z awaryjnym zejściem na ekran w punkcie `(0,0)`, a potem na pierwszy z listy.
+`Quickshell.screens` **nie** odpowiada priorytetom kompozytora — na desktopie z KDE
+`screens[0]` to drugi monitor. Monitor można wskazać po nazwie w `shell.qml`
+(`islandScreen`); **domyślnie jest pusto**, czyli automat: ekran w punkcie `(0,0)`,
+a potem pierwszy z listy. Nie wpisuj tu nazwy na stałe — projekt chodzi na dwóch
+maszynach o różnych monitorach (`DP-1` na desktopie, `eDP-1` na laptopie).
 
 ## Styl
 

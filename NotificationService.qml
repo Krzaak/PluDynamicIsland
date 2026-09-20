@@ -4,6 +4,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Notifications
+import Quickshell.Wayland
 
 // Powiadomienia pulpitu i transfery plików KDE — dwa różne mechanizmy:
 //
@@ -180,9 +181,10 @@ Singleton {
     // Sama kolejność jest tu istotna. `DesktopEntry.execute()` na działającej
     // aplikacji nic nie podnosi (tak zgłoszony był błąd: Discord otwarty,
     // klik nie przełącza na niego), a aplikacji bez pilnowania pojedynczej
-    // instancji otworzyłby drugie okno. Podnoszenie robi window_activator.py,
-    // bo QML nie ma na KWinie dostępu do listy okien — szczegóły w jego
-    // nagłówku. Zwraca, czy było co otwierać.
+    // instancji otworzyłby drugie okno. Podnoszenie idzie dwiema drogami —
+    // ToplevelManagerem tam, gdzie kompozytor daje listę okien, i mostkiem
+    // window_activator.py na KWinie (patrz raiseToplevel niżej). Zwraca,
+    // czy było co otwierać.
     function openApp(appId) {
         if (!appId || appId === "") return false;
         if (!DesktopEntries.byId(appId)) {
@@ -217,12 +219,54 @@ Singleton {
         return def !== null || appId !== "";
     }
 
+    // Warianty nazwy, po których poznajemy okno: pełne id bez ".desktop"
+    // i jego ostatni człon, bo appId okna bywa zapisane raz tak, raz tak
+    // (wpis "org.kde.dolphin", okno "dolphin").
+    function idVariants(value) {
+        const s = String(value || "").toLowerCase().trim().replace(/\.desktop$/, "");
+        if (s === "") return [];
+        const last = s.split(".").pop();
+        return last !== s ? [s, last] : [s];
+    }
+
+    // Podniesienie okna bez procesu — tam, gdzie kompozytor wystawia
+    // wlr-foreign-toplevel-management. Hyprland tak robi (zmierzone:
+    // ToplevelManager widzi okna z appId), KWin nie i lista jest tam pusta,
+    // więc ta funkcja po prostu zwraca false i zostaje mostek.
+    //
+    // Dopasowujemy WYŁĄCZNIE po appId, nigdy po tytule: przy frazie "discord"
+    // wygrałaby karta przeglądarki z Discordem w tytule. To ta sama pułapka,
+    // przed którą broni się window_activator.py przez getWindowInfo.
+    function raiseToplevel(appId, startupClass) {
+        const wanted = idVariants(appId).concat(idVariants(startupClass));
+        if (wanted.length === 0) return false;
+
+        const all = ToplevelManager.toplevels.values;
+        for (let i = 0; i < all.length; i++) {
+            const t = all[i];
+            const mine = idVariants(t.appId);
+            for (let j = 0; j < mine.length; j++) {
+                if (wanted.indexOf(mine[j]) >= 0) {
+                    t.activate();
+                    console.log("[okno] aktywowano " + t.appId + ": " + t.title);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     // Jeden proces aktywatora na raz — kolejne kliknięcia czekają w kolejce.
     function pumpOpenQueue() {
         if (activator.running || priv.openQueue.length === 0) return;
         const appId = priv.openQueue[0];
         const app = DesktopEntries.byId(appId);
         if (!app) {
+            priv.openQueue = priv.openQueue.slice(1);
+            pumpOpenQueue();
+            return;
+        }
+        if (raiseToplevel(appId, app.startupClass || "")) {
             priv.openQueue = priv.openQueue.slice(1);
             pumpOpenQueue();
             return;

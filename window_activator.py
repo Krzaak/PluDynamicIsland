@@ -3,6 +3,10 @@
 Podnosi okno działającej aplikacji na KWin/Wayland. Uruchamiany na żądanie
 przez wyspę (przycisk "otwórz" w historii powiadomień), kończy się od razu.
 
+Ścieżka WYŁĄCZNIE dla KWina. Na Hyprlandzie i każdym innym kompozytorze
+z wlr-foreign-toplevel-management robi to sama wyspa przez ToplevelManager
+(NotificationService.raiseToplevel) i tego skryptu nawet nie uruchamia.
+
 Dlaczego osobne narzędzie, a nie QML: Quickshell widzi okna tylko przez
 wlr-foreign-toplevel-management, którego KWin nie wystawia — ToplevelManager
 zwraca tam pustą listę (zmierzone). Plasma ma własny protokół Waylanda
